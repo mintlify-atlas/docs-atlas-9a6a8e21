@@ -1,0 +1,128 @@
+{
+  "projectType": "ai-ml",
+  "projectName": "AI Systems Engineering Portfolio",
+  "projectDescription": "End-to-end machine learning systems workflow covering data processing, model training, optimization, deployment, and monitoring with production-grade best practices.",
+  "theme": "aspen",
+  "primaryColor": "#2563EB",
+  "lightColor": "#3B82F6",
+  "darkColor": "#1E40AF",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/ml-lifecycle",
+              "concepts/reproducibility",
+              "concepts/configuration"
+            ]
+          },
+          {
+            "group": "Training",
+            "pages": [
+              "training/data-loading",
+              "training/feature-engineering",
+              "training/model-selection",
+              "training/evaluation"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/overview",
+              "deployment/onnx-export",
+              "deployment/quantization",
+              "deployment/parity-validation"
+            ]
+          },
+          {
+            "group": "Optimization",
+            "pages": [
+              "optimization/benchmarking",
+              "optimization/hardware-aware",
+              "optimization/performance-tuning"
+            ]
+          },
+          {
+            "group": "Runtime",
+            "pages": [
+              "runtime/prediction-api",
+              "runtime/qa-api",
+              "runtime/streaming-pipelines",
+              "runtime/monitoring"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api-reference/health",
+              "api-reference/predict",
+              "api-reference/batch-predict",
+              "api-reference/drift-monitoring"
+            ]
+          },
+          {
+            "group": "QA API",
+            "pages": [
+              "api-reference/qa-health",
+              "api-reference/qa-ask",
+              "api-reference/qa-stream"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Case Studies",
+        "groups": [
+          {
+            "group": "Real-World Applications",
+            "pages": [
+              "case-studies/overview",
+              "case-studies/healthcare-edge-ai",
+              "case-studies/embedded-classifier",
+              "case-studies/sports-streaming"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Configuration-driven reproducible training pipeline",
+    "Multi-model evaluation with cross-validation",
+    "ONNX export with INT8 quantization support",
+    "Statistical benchmarking and hardware-aware optimization",
+    "Production-ready FastAPI prediction and QA endpoints",
+    "Real-time streaming inference with async workers",
+    "Data drift detection and retraining triggers",
+    "RAG-based question answering system"
+  ],
+  "publicApiSurface": [
+    "POST /predict - Single prediction endpoint",
+    "POST /batch_predict - Batch prediction endpoint",
+    "GET /health - Service health check",
+    "GET /monitoring/drift - Drift detection status",
+    "POST /qa/ask - Question answering endpoint",
+    "POST /qa/stream - Streaming QA endpoint",
+    "python -m src.train - Training pipeline",
+    "python deployment/export_onnx.py - ONNX export",
+    "python deployment/quantize_onnx.py - Model quantization",
+    "python benchmarking/statistical_benchmark.py - Performance benchmarking",
+    "python hardware_aware_ml/tradeoff_experiments.py - Hardware optimization"
+  ]
+}
