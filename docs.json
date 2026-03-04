@@ -93,7 +93,8 @@
             "pages": [
               "api-reference/qa-health",
               "api-reference/qa-ask",
-              "api-reference/qa-stream"
+              "api-reference/qa-stream",
+              "api-reference/qa-monitoring"
             ]
           }
         ]

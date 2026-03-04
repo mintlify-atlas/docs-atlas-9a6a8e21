@@ -1,0 +1,87 @@
+---
+title: 'QA Monitoring'
+api: 'GET /monitoring'
+---
+
+# QA Service Monitoring
+
+Returns aggregated metrics for the QA service including request counts, latency, accuracy, and hallucination rates.
+
+## Endpoint
+
+```
+GET /monitoring
+```
+
+## Response
+
+<ResponseField name="requests_total" type="integer" required>
+  Total number of QA requests processed since service startup.
+</ResponseField>
+
+<ResponseField name="avg_latency_ms" type="number" required>
+  Average response latency across all requests in milliseconds.
+</ResponseField>
+
+<ResponseField name="avg_retrieval_accuracy" type="number" required>
+  Average retrieval accuracy score (0.0 to 1.0). Measures how well retrieved documents match the query.
+</ResponseField>
+
+<ResponseField name="hallucination_rate" type="number" required>
+  Rate of responses flagged as potential hallucinations (0.0 to 1.0). Higher values indicate more responses without supporting citations.
+</ResponseField>
+
+## Example Request
+
+```bash cURL
+curl http://localhost:8000/monitoring
+```
+
+## Example Response
+
+```json
+{
+  "requests_total": 1250,
+  "avg_latency_ms": 856.3421,
+  "avg_retrieval_accuracy": 0.7823,
+  "hallucination_rate": 0.0456
+}
+```
+
+## Metrics Interpretation
+
+### Latency
+- **< 500ms**: Excellent performance
+- **500-1000ms**: Good performance
+- **> 1000ms**: Consider optimization (reduce chunk size, use faster embeddings)
+
+### Retrieval Accuracy
+- **> 0.8**: High quality matches
+- **0.6-0.8**: Moderate quality, acceptable
+- **< 0.6**: Poor retrieval, review document chunking strategy
+
+### Hallucination Rate
+- **< 0.05**: Low risk, model stays grounded
+- **0.05-0.10**: Moderate risk, monitor closely
+- **> 0.10**: High risk, review prompts and citation validation
+
+## Implementation
+
+The monitoring metrics are updated after each QA request (see `src/qa_api.py:70-78` and `src/qa_api.py:211-219`):
+
+```python
+monitoring: Dict[str, Any] = {
+    'requests_total': 0,
+    'latency_ms_total': 0.0,
+    'retrieval_accuracy_total': 0.0,
+    'hallucination_count': 0,
+}
+```
+
+Metrics reset on service restart.
+
+## Related Endpoints
+
+- [QA Ask](/api-reference/qa-ask) - Submit questions to the QA system
+- [QA Stream](/api-reference/qa-stream) - Stream answers in real-time
+- [QA Health](/api-reference/qa-health) - Check if QA service is ready

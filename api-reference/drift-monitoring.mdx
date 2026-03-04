@@ -7,11 +7,14 @@ api: 'GET /monitoring/drift'
 
 Monitors feature distribution drift and prediction rate shifts to detect when model retraining is needed.
 
-## Endpoint
+## Endpoints
 
 ```
 GET /monitoring/drift
+GET /monitoring/retraining_trigger
 ```
+
+Both endpoints return identical responses. The `/monitoring/retraining_trigger` path is an alias for semantic clarity in retraining workflows.
 
 ## Response
 
