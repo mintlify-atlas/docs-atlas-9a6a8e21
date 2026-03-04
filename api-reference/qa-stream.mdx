@@ -1,0 +1,473 @@
+---
+title: 'QA Stream'
+api: 'POST /qa/stream'
+---
+
+# Ask Question (Streaming)
+
+Submits a student question and streams the answer token-by-token in real-time using Server-Sent Events (SSE).
+
+## Endpoint
+
+```
+POST /qa/stream
+```
+
+## Request Body
+
+<ParamField body="question_lecture" type="string" required>
+  The lecture or section context for the question.
+  
+  **Validation:** `min_length=1`
+  
+  Example: "Visual Analytics"
+</ParamField>
+
+<ParamField body="question_title" type="string" required>
+  The title or subject line of the student's question.
+  
+  **Validation:** `min_length=1`
+  
+  Example: "Bar vs Line charts"
+</ParamField>
+
+<ParamField body="question_body" type="string" required>
+  The full text of the student's question with details.
+  
+  **Validation:** `min_length=1`
+  
+  Example: "When should I use bar charts versus line charts for showing trends over time?"
+</ParamField>
+
+## Response Format
+
+Returns a `text/event-stream` with Server-Sent Events (SSE).
+
+### Token Events
+
+Each token is sent as a separate SSE event:
+
+```
+data: {"token": "When"}
+
+data: {"token": " comparing"}
+
+data: {"token": " trends"}
+```
+
+<ResponseField name="token" type="string">
+  A single token (word or punctuation) from the LLM response.
+  
+  Sent incrementally as the LLM generates the answer.
+</ResponseField>
+
+### Final Event
+
+After all tokens, a final event with complete metrics:
+
+```
+data: {"done": true, "confidence": 0.8752, "citations": [...], "latency_ms": 2341.23, "retrieval_accuracy": 1.0, "hallucination_flag": false}
+```
+
+<ResponseField name="done" type="boolean">
+  Always `true` in the final event. Signals end of stream.
+</ResponseField>
+
+<ResponseField name="confidence" type="number">
+  Confidence score between 0.0 and 1.0.
+</ResponseField>
+
+<ResponseField name="citations" type="array">
+  Array of citation strings extracted from the complete answer.
+  
+  Format: `[Section: <section>, Lecture: <lecture>]`
+</ResponseField>
+
+<ResponseField name="latency_ms" type="number">
+  Total request processing time in milliseconds.
+</ResponseField>
+
+<ResponseField name="retrieval_accuracy" type="number">
+  Percentage of citations matching retrieved context (0.0-1.0).
+</ResponseField>
+
+<ResponseField name="hallucination_flag" type="boolean">
+  Whether potential hallucination was detected.
+</ResponseField>
+
+## Status Codes
+
+- **200 OK** - Stream initiated successfully
+
+## Example Request
+
+```bash cURL
+curl -X POST "http://localhost:8001/qa/stream" \
+  -H "Content-Type: application/json" \
+  -H "accept: text/event-stream" \
+  -N \
+  -d '{
+    "question_lecture": "Visual Analytics",
+    "question_title": "Bar vs Line charts",
+    "question_body": "When should I use bar charts versus line charts for showing trends over time in Tableau?"
+  }'
+```
+
+### Python Client Example
+
+```python
+import requests
+import json
+
+url = "http://localhost:8001/qa/stream"
+payload = {
+    "question_lecture": "Visual Analytics",
+    "question_title": "Bar vs Line charts",
+    "question_body": "When should I use bar charts versus line charts for showing trends over time?"
+}
+
+with requests.post(url, json=payload, stream=True) as response:
+    for line in response.iter_lines():
+        if line:
+            # Remove 'data: ' prefix
+            if line.startswith(b'data: '):
+                data = json.loads(line[6:])
+                
+                if 'token' in data:
+                    print(data['token'], end='', flush=True)
+                elif data.get('done'):
+                    print("\n\nMetrics:")
+                    print(f"Confidence: {data['confidence']}")
+                    print(f"Citations: {len(data['citations'])}")
+                    print(f"Latency: {data['latency_ms']}ms")
+                    print(f"Retrieval Accuracy: {data['retrieval_accuracy']}")
+                    print(f"Hallucination: {data['hallucination_flag']}")
+```
+
+## Example Response Stream
+
+```
+data: {"token": "Line"}
+
+data: {"token": " charts"}
+
+data: {"token": " are"}
+
+data: {"token": " generally"}
+
+data: {"token": " better"}
+
+data: {"token": " for"}
+
+data: {"token": " showing"}
+
+data: {"token": " trends"}
+
+data: {"token": " over"}
+
+data: {"token": " time"}
+
+data: {"token": " because"}
+
+data: {"token": " they"}
+
+data: {"token": " emphasize"}
+
+data: {"token": " continuity"}
+
+data: {"token": " and"}
+
+data: {"token": " flow"}
+
+data: {"token": "."}
+
+data: {"token": " Bar"}
+
+data: {"token": " charts"}
+
+data: {"token": " are"}
+
+data: {"token": " better"}
+
+data: {"token": " for"}
+
+data: {"token": " comparing"}
+
+data: {"token": " discrete"}
+
+data: {"token": " categories"}
+
+data: {"token": "."}
+
+data: {"token": "\n\n"}
+
+data: {"token": "Citations"}
+
+data: {"token": ":"}
+
+data: {"token": "\n"}
+
+data: {"token": "-"}
+
+data: {"token": " ["}
+
+data: {"token": "Section"}
+
+data: {"token": ":"}
+
+data: {"token": " Visual"}
+
+data: {"token": " Analytics"}
+
+data: {"token": ","}
+
+data: {"token": " Lecture"}
+
+data: {"token": ":"}
+
+data: {"token": " Building"}
+
+data: {"token": " charts"}
+
+data: {"token": "]"}
+
+data: {"done": true, "confidence": 0.8234, "citations": ["[Section: Visual Analytics, Lecture: Building charts]"], "latency_ms": 2145.6789, "retrieval_accuracy": 1.0, "hallucination_flag": false}
+
+```
+
+## Implementation Details
+
+Defined in `src/qa_api.py:329-331`
+
+**Request Model:** `QARequest` (src/qa_api.py:32-35)
+
+```python
+class QARequest(BaseModel):
+    question_lecture: str = Field(..., min_length=1)
+    question_title: str = Field(..., min_length=1)
+    question_body: str = Field(..., min_length=1)
+```
+
+**Stream Generator:** `_stream_tokens()` (src/qa_api.py:282-327)
+
+## Streaming Pipeline
+
+### 1. Question Formatting
+
+Same as non-streaming endpoint:
+
+```python
+question = f"Lecture: {req.question_lecture}\nTitle: {req.question_title}\nBody: {req.question_body}"
+```
+
+### 2. Retrieval (src/qa_api.py:291)
+
+Retrieves top k=4 document chunks from vector store.
+
+### 3. LLM Streaming (src/qa_api.py:302-307)
+
+```python
+full_text = []
+async for chunk in llm.astream(messages):
+    token = chunk.content if hasattr(chunk, "content") else str(chunk)
+    if token:
+        full_text.append(token)
+        yield f"data: {json.dumps({'token': token})}\n\n".encode("utf-8")
+        await asyncio.sleep(0)
+```
+
+### 4. Final Metrics Computation (src/qa_api.py:309-326)
+
+After streaming completes:
+- Reassemble full answer text from tokens
+- Extract citations
+- Compute retrieval accuracy
+- Detect hallucinations
+- Calculate confidence score
+- Update monitoring metrics
+- Send final event with all metrics
+
+### 5. SSE Format
+
+Each event follows Server-Sent Events specification:
+
+```
+data: <JSON>
+
+
+```
+
+Two newlines required after each event.
+
+## Fallback Behavior
+
+### Service Not Ready
+
+If `OPENAI_API_KEY` not configured:
+
+```
+data: {"token": "I don't have enough context to answer confidently."}
+
+
+```
+
+Stream ends immediately without final metrics event.
+
+### No Context Retrieved
+
+If no relevant documents found:
+
+```
+data: {"token": "I don't have enough context to answer confidently."}
+
+
+```
+
+Stream ends immediately without final metrics event.
+
+## Frontend Integration
+
+### JavaScript EventSource Example
+
+```javascript
+const eventSource = new EventSource('/qa/stream', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    question_lecture: 'Visual Analytics',
+    question_title: 'Bar vs Line charts',
+    question_body: 'When should I use bar charts versus line charts?'
+  })
+});
+
+let answerElement = document.getElementById('answer');
+
+eventSource.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  
+  if (data.token) {
+    answerElement.textContent += data.token;
+  } else if (data.done) {
+    console.log('Stream complete', data);
+    document.getElementById('confidence').textContent = data.confidence;
+    document.getElementById('citations').textContent = data.citations.join(', ');
+    eventSource.close();
+  }
+};
+
+eventSource.onerror = (error) => {
+  console.error('Stream error', error);
+  eventSource.close();
+};
+```
+
+### React Example with fetch
+
+```javascript
+import { useState } from 'react';
+
+function QAStream() {
+  const [answer, setAnswer] = useState('');
+  const [metrics, setMetrics] = useState(null);
+  
+  const askQuestion = async () => {
+    const response = await fetch('/qa/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        question_lecture: 'Visual Analytics',
+        question_title: 'Bar vs Line charts',
+        question_body: 'When should I use bar charts versus line charts?'
+      })
+    });
+    
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      const chunk = decoder.decode(value);
+      const lines = chunk.split('\n\n');
+      
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = JSON.parse(line.slice(6));
+          
+          if (data.token) {
+            setAnswer(prev => prev + data.token);
+          } else if (data.done) {
+            setMetrics(data);
+          }
+        }
+      }
+    }
+  };
+  
+  return (
+    <div>
+      <button onClick={askQuestion}>Ask Question</button>
+      <div>{answer}</div>
+      {metrics && (
+        <div>
+          <p>Confidence: {metrics.confidence}</p>
+          <p>Citations: {metrics.citations.length}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+## Monitoring
+
+Same monitoring as non-streaming endpoint (src/qa_api.py:316):
+
+```python
+_update_monitoring(latency_ms, retrieval_accuracy, hallucination_flag)
+```
+
+Metrics tracked:
+- Total requests
+- Average latency
+- Average retrieval accuracy
+- Hallucination rate
+
+Access via `GET /monitoring` endpoint.
+
+## Performance Considerations
+
+### Latency Trade-offs
+
+- **First token latency** - Lower than non-streaming (retrieval + first token only)
+- **Total latency** - Same as non-streaming (measured from start to final event)
+- **Perceived latency** - Much lower for users (see progress immediately)
+
+### Connection Management
+
+- Keep-alive connections maintained during streaming
+- Consider timeout settings for long-running requests
+- Handle client disconnections gracefully
+
+### Scaling Considerations
+
+- Each streaming request holds a connection open
+- Monitor concurrent connection limits
+- Use load balancer with SSE support
+- Consider WebSocket alternative for very high concurrency
+
+## Use Cases
+
+- **Interactive chatbot UI** - Show typing animation as answer generates
+- **Real-time teaching assistant** - Students see answers appear progressively
+- **Live demonstrations** - Display AI reasoning process in real-time
+- **Progressive disclosure** - Users can start reading before generation completes
+
+## Related Endpoints
+
+- [QA Ask](/api-reference/qa-ask) - Non-streaming version returning complete response
+- [QA Health](/api-reference/qa-health) - Check if QA service is ready
+- `GET /monitoring` - View aggregated QA metrics

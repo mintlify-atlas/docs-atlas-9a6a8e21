@@ -1,0 +1,79 @@
+---
+title: 'Case Studies Overview'
+description: 'Real-world scenarios demonstrating AI system engineering principles'
+icon: 'book-open'
+---
+
+## Introduction
+
+This collection presents three scenario-based system designs that demonstrate practical applications of the AI systems engineering principles implemented in this portfolio. Each case study is tied directly to repository components and illustrates different deployment contexts, constraints, and trade-offs.
+
+## Case Study Scenarios
+
+<CardGroup cols={2}>
+  <Card
+    title="Healthcare Edge AI"
+    icon="hospital"
+    href="/case-studies/healthcare-edge-ai"
+  >
+    Latency-sensitive risk scoring at point-of-care with intermittent connectivity. Demonstrates edge deployment, ONNX optimization, and reliability-first design.
+  </Card>
+  
+  <Card
+    title="Embedded Digit Classifier"
+    icon="microchip"
+    href="/case-studies/embedded-classifier"
+  >
+    Digit recognition on memory-constrained edge hardware. Shows quantization benefits, static memory management, and latency optimization.
+  </Card>
+  
+  <Card
+    title="Sports Analytics Streaming"
+    icon="chart-line"
+    href="/case-studies/sports-streaming"
+  >
+    Near-real-time event scoring for player impact streams. Illustrates queue-aware processing, micro-batching, and throughput-latency trade-offs.
+  </Card>
+</CardGroup>
+
+## System Dimensions Demonstrated
+
+### Edge Deployment
+The healthcare and embedded classifier scenarios explore deployment under strict resource constraints:
+- Local inference without cloud dependency
+- Memory and compute limitations
+- Quantization and model optimization techniques
+- Cold start and initialization considerations
+
+### Streaming Processing
+The sports analytics scenario demonstrates real-time pipeline design:
+- JSONL event stream processing
+- Micro-batching for throughput optimization
+- Queue stability under burst traffic
+- Batch backfill for consistency validation
+
+### Cross-Cutting Concerns
+All case studies address:
+- **Reliability vs. Complexity**: Conservative threshold selection and simplified architectures
+- **Observability**: Drift indicators, benchmark dashboards, and monitoring
+- **Trade-off Documentation**: Explicit discussion of bottlenecks and design assumptions
+- **Reproducibility**: Tied to executable code and configuration in the repository
+
+<Info>
+  Each case study documents not just the solution, but also the trade-offs, bottlenecks, assumptions, and limitations encountered in real-world deployments.
+</Info>
+
+## How to Use These Case Studies
+
+1. **Understand Context**: Each case study begins with a clear scenario description
+2. **Explore Design Decisions**: System design sections explain architectural choices
+3. **Analyze Trade-offs**: Explicit discussion of performance bottlenecks and constraints
+4. **Review Implementation**: Direct references to repository code and components
+5. **Apply to Your Context**: Use patterns and lessons learned in similar scenarios
+
+<Tip>
+  Start with the case study that most closely matches your deployment context:
+  - Edge devices with connectivity constraints → Healthcare Edge AI
+  - Embedded systems with memory limits → Embedded Digit Classifier
+  - Real-time streaming workloads → Sports Analytics Streaming
+</Tip>

@@ -1,0 +1,775 @@
+---
+title: 'Performance Tuning Strategies'
+description: 'Practical guidance for interpreting benchmarks and optimizing ML systems for production deployment'
+---
+
+## Overview
+
+Performance tuning involves balancing multiple competing objectives: latency, throughput, accuracy, memory footprint, and energy consumption. This guide provides practical strategies for interpreting benchmark results and making informed deployment decisions.
+
+## Core Trade-offs
+
+### Latency vs Accuracy
+
+The most common trade-off in ML deployment is between inference speed and prediction quality.
+
+<Tabs>
+  <Tab title="Understanding the Trade-off">
+    **Quantization reduces precision but increases speed:**
+    
+    ```
+    FP32 (Full Precision)
+    ├─ Accuracy: 85.6%
+    ├─ Latency: 0.095 ms/sample
+    └─ Memory: 3.22 MB
+
+    INT8 (Quantized)
+    ├─ Accuracy: 85.4% (↓ 0.2%)
+    ├─ Latency: 0.068 ms/sample (↑ 28% faster)
+    └─ Memory: 2.41 MB (↓ 25%)
+    ```
+    
+    **Key Question**: Is 0.2% accuracy loss acceptable for 28% latency improvement?
+  </Tab>
+  
+  <Tab title="When to Prioritize Latency">
+    Choose lower latency over accuracy when:
+    
+    - User experience depends on real-time response (< 100ms)
+    - SLA requirements mandate strict latency bounds
+    - Handling high-frequency requests (> 1000 QPS)
+    - Deploying to resource-constrained edge devices
+    
+    **Example scenarios:**
+    - Search ranking (milliseconds matter)
+    - Real-time recommendations (must beat timeout)
+    - Fraud detection (instant decision required)
+  </Tab>
+  
+  <Tab title="When to Prioritize Accuracy">
+    Choose higher accuracy over latency when:
+    
+    - Cost of false positives/negatives is high
+    - Regulatory requirements demand precision
+    - Model is not on critical path (batch processing)
+    - Latency budget already comfortable
+    
+    **Example scenarios:**
+    - Medical diagnosis (accuracy paramount)
+    - Credit scoring (financial consequences)
+    - Safety-critical systems (autonomous vehicles)
+  </Tab>
+  
+  <Tab title="Finding the Balance">
+    **Use statistical benchmarking to quantify:**
+    
+    ```bash
+    python benchmarking/statistical_benchmark.py --runs 30 --batch-size 256
+    python hardware_aware_ml/tradeoff_experiments.py
+    python benchmarking/dashboard.py
+    ```
+    
+    **Look at `statistical_comparisons.csv`:**
+    
+    ```csv
+    baseline,scenario,metric,mean_diff,p_value,cohens_d_paired
+    onnx_fp32,onnx_int8,accuracy,-0.002,0.001,0.89
+    onnx_fp32,onnx_int8,latency_ms_per_sample,-0.027,0.0001,1.87
+    ```
+    
+    **Interpretation:**
+    - Accuracy loss: -0.002 (0.2%), statistically significant but small effect size
+    - Latency gain: -0.027 ms (28% faster), large effect size (d=1.87)
+    - **Decision**: Quantization worthwhile if 0.2% accuracy loss acceptable
+  </Tab>
+</Tabs>
+
+### Throughput vs Queue Delay
+
+High throughput doesn't guarantee low latency. Queue delays can dominate under load.
+
+<Steps>
+  <Step title="Measure Isolated Throughput">
+    Benchmark single-request throughput:
+    
+    ```python
+    throughput_samples_per_sec = batch_size / inference_time
+    ```
+    
+    Example from benchmarks:
+    - sklearn_fp32: 8,266 samples/sec
+    - onnx_fp32: 10,526 samples/sec
+    - onnx_int8: 14,706 samples/sec
+  </Step>
+  
+  <Step title="Account for Queueing">
+    Under concurrent load, total latency includes queue wait time:
+    
+    ```
+    Total Latency = Queue Delay + Inference Time
+    ```
+    
+    **Little's Law:**
+    ```
+    Average Queue Delay = (Arrival Rate / Throughput) × Service Time
+    ```
+    
+    When arrival rate approaches throughput capacity, queue delay explodes.
+  </Step>
+  
+  <Step title="Calculate Utilization">
+    System utilization = Arrival Rate / Throughput
+    
+    ```python
+    # Example: 8000 requests/sec arrival rate
+    utilization_sklearn = 8000 / 8266 = 0.97  # 97% - dangerous!
+    utilization_onnx_int8 = 8000 / 14706 = 0.54  # 54% - safe
+    ```
+    
+    <Warning>
+      **Keep utilization < 70%** for stable latency. Above 80%, queue delays become unpredictable.
+    </Warning>
+  </Step>
+  
+  <Step title="Right-Size for Peak Load">
+    Provision for peak traffic, not average:
+    
+    ```python
+    required_throughput = peak_qps * safety_factor
+    # safety_factor typically 1.5-2.0 for headroom
+    ```
+    
+    Choose scenario with sufficient throughput margin:
+    - Peak load: 10,000 QPS
+    - Safety factor: 1.5×
+    - Required: 15,000 samples/sec
+    - **Best choice**: onnx_int8 (14,706 samples/sec, close but add instances)
+  </Step>
+</Steps>
+
+### Memory vs Concurrency
+
+Lower memory footprint enables higher concurrency on fixed hardware.
+
+<AccordionGroup>
+  <Accordion title="Memory Footprint Analysis">
+    From `hardware_tradeoffs.csv`:
+    
+    ```
+    sklearn_fp32: 4.15 MB per inference
+    onnx_fp32:    3.22 MB per inference
+    onnx_int8:    2.41 MB per inference
+    ```
+    
+    **Available memory**: 16 GB RAM
+    
+    **Maximum concurrent inferences:**
+    ```python
+    max_concurrent_sklearn = 16_000 MB / 4.15 MB ≈ 3,855
+    max_concurrent_onnx_fp32 = 16_000 MB / 3.22 MB ≈ 4,969
+    max_concurrent_onnx_int8 = 16_000 MB / 2.41 MB ≈ 6,639
+    ```
+    
+    INT8 quantization enables **72% more concurrent requests** on same hardware.
+  </Accordion>
+  
+  <Accordion title="Memory Pressure Index">
+    The `memory_pressure_index` quantifies memory efficiency:
+    
+    ```python
+    memory_pressure = memory_mb / throughput_samples_per_sec
+    ```
+    
+    Lower values indicate better memory utilization per unit of work.
+    
+    **Typical values:**
+    - sklearn_fp32: 0.0005
+    - onnx_fp32: 0.0003 (40% better)
+    - onnx_int8: 0.0002 (60% better)
+    
+    **Use case**: When scaling horizontally, lower memory pressure means fewer instances needed.
+  </Accordion>
+  
+  <Accordion title="Batch Size Tuning">
+    Larger batches improve throughput but increase latency and memory:
+    
+    ```bash
+    # Test multiple batch sizes
+    for batch_size in 32 64 128 256 512; do
+        python benchmarking/statistical_benchmark.py \
+            --runs 10 \
+            --batch-size $batch_size
+    done
+    ```
+    
+    **Typical pattern:**
+    - Batch 32: Low latency, low throughput
+    - Batch 256: Balanced (recommended starting point)
+    - Batch 1024: High throughput, high latency
+    
+    Choose based on your SLA:
+    - Real-time API: batch 32-64
+    - Batch processing: batch 512-1024
+  </Accordion>
+</AccordionGroup>
+
+## Interpreting Benchmark Results
+
+### Reading Statistical Summaries
+
+The `stat_benchmark_summary.csv` provides confidence intervals:
+
+```csv
+scenario,latency_ms_per_sample_mean,latency_ms_per_sample_ci_low,latency_ms_per_sample_ci_high
+sklearn_fp32,0.121,0.118,0.124
+onnx_fp32,0.095,0.092,0.098
+onnx_int8,0.068,0.065,0.071
+```
+
+<Steps>
+  <Step title="Check Confidence Intervals">
+    **Non-overlapping CIs indicate significant differences:**
+    
+    ```
+    sklearn_fp32: [0.118, 0.124]
+    onnx_fp32:    [0.092, 0.098]  ← No overlap with sklearn
+    onnx_int8:    [0.065, 0.071]  ← No overlap with onnx_fp32
+    ```
+    
+    All three scenarios are statistically distinguishable.
+  </Step>
+  
+  <Step title="Assess Practical Significance">
+    **Check effect sizes in `statistical_comparisons.csv`:**
+    
+    ```csv
+    baseline,scenario,metric,cohens_d_paired
+    onnx_fp32,onnx_int8,latency_ms_per_sample,1.87
+    ```
+    
+    Cohen's d = 1.87 is a **large effect** (> 0.8). This difference matters in production.
+  </Step>
+  
+  <Step title="Validate Consistency">
+    **Check variance across runs:**
+    
+    Wide confidence intervals suggest:
+    - High run-to-run variability
+    - Need more benchmark iterations
+    - Possible interference from background processes
+    
+    **Narrow intervals indicate**:
+    - Consistent performance
+    - Results are reproducible
+    - Safe to deploy
+  </Step>
+</Steps>
+
+### Using the Dashboard
+
+The composite score provides a single metric for multi-objective optimization:
+
+```python
+composite_score = (
+    0.4 * accuracy +
+    0.2 * (1 / (1 + latency_ms_per_sample)) +
+    0.2 * (1 / (1 + memory_mb)) +
+    0.2 * (1 / (1 + energy_mj_proxy))
+)
+```
+
+<Info>
+  **Customize weights** based on your priorities:
+  
+  ```python
+  # Latency-critical application
+  composite_score = 0.2 * accuracy + 0.6 * latency_score + ...
+  
+  # Accuracy-critical application
+  composite_score = 0.7 * accuracy + 0.1 * latency_score + ...
+  ```
+</Info>
+
+The dashboard generates:
+
+1. **benchmark_dashboard.csv**: All scenarios with composite scores
+2. **benchmark_summary.json**: Best scenario by each dimension
+3. **benchmark_tradeoff.png**: Latency vs accuracy scatter plot
+
+**Example interpretation:**
+
+```json
+{
+  "best_composite": {"scenario": "onnx_int8", "composite_score": 0.87},
+  "lowest_latency": {"scenario": "onnx_int8", "latency_ms_per_sample": 0.068},
+  "lowest_memory": {"scenario": "onnx_int8", "memory_mb": 2.41}
+}
+```
+
+ONNX INT8 wins on most dimensions — strong candidate for production.
+
+## Optimization Strategies
+
+### Choosing Between Scenarios
+
+<CardGroup cols={3}>
+  <Card title="sklearn_fp32" icon="python">
+    **When to use:**
+    - Prototyping and experimentation
+    - No performance requirements
+    - Avoiding ONNX dependencies
+    - Simple deployment critical
+    
+    **Pros:**
+    - No conversion step
+    - Native Python debugging
+    - Wide library support
+    
+    **Cons:**
+    - 2-3× slower than ONNX
+    - Higher memory footprint
+    - Lower throughput capacity
+  </Card>
+  
+  <Card title="onnx_fp32" icon="bolt">
+    **When to use:**
+    - Accuracy cannot be compromised
+    - Production deployment
+    - Cross-platform requirements
+    - Balanced performance needs
+    
+    **Pros:**
+    - 2-3× faster than sklearn
+    - Same accuracy as training
+    - Optimized CPU kernels
+    
+    **Cons:**
+    - Requires ONNX conversion
+    - Larger than INT8
+  </Card>
+  
+  <Card title="onnx_int8" icon="microchip">
+    **When to use:**
+    - Latency-critical applications
+    - Resource-constrained deployment
+    - High throughput requirements
+    - Energy efficiency matters
+    
+    **Pros:**
+    - 3-5× faster than sklearn
+    - 75% memory reduction
+    - Highest throughput
+    - Lowest energy consumption
+    
+    **Cons:**
+    - Slight accuracy loss (< 1%)
+    - Quantization artifacts possible
+  </Card>
+</CardGroup>
+
+### Decision Framework
+
+<Steps>
+  <Step title="Define Requirements">
+    Establish clear thresholds:
+    
+    ```yaml
+    requirements:
+      latency_p95_ms: 100
+      accuracy_min: 0.850
+      memory_max_mb: 10
+      throughput_min_qps: 5000
+      energy_budget_mj: 2.0
+    ```
+  </Step>
+  
+  <Step title="Filter by Hard Constraints">
+    Eliminate scenarios that violate requirements:
+    
+    ```python
+    candidates = df[
+        (df['latency_p95_ms'] <= 100) &
+        (df['accuracy'] >= 0.850) &
+        (df['memory_mb'] <= 10) &
+        (df['throughput_samples_per_sec'] >= 5000)
+    ]
+    ```
+  </Step>
+  
+  <Step title="Rank by Optimization Objective">
+    Sort remaining candidates by primary objective:
+    
+    ```python
+    # If latency is most important
+    best = candidates.sort_values('latency_ms_per_sample').iloc[0]
+    
+    # If balanced performance
+    best = candidates.sort_values('composite_score', ascending=False).iloc[0]
+    ```
+  </Step>
+  
+  <Step title="Validate in Staging">
+    Test selected scenario under realistic load:
+    
+    ```bash
+    # Load testing with concurrent requests
+    wrk -t12 -c400 -d30s --latency http://staging-api/predict
+    ```
+    
+    Verify:
+    - P95 latency under load
+    - Memory consumption stable
+    - No degradation over time
+  </Step>
+</Steps>
+
+## Production Deployment Best Practices
+
+### Pre-deployment Validation
+
+<Check>
+  **Benchmark checklist:**
+  
+  - [ ] Run **30+ iterations** for statistical power
+  - [ ] Test on **production-like hardware** (not dev laptops)
+  - [ ] Use **realistic batch sizes** matching production traffic
+  - [ ] Include **warmup runs** to account for cold start
+  - [ ] Measure **95th percentile latency**, not just mean
+  - [ ] Test **concurrent requests** to validate throughput
+  - [ ] Monitor **memory over time** for leaks
+  - [ ] Validate **accuracy on recent data** (check for drift)
+</Check>
+
+### Monitoring in Production
+
+<Tabs>
+  <Tab title="Latency Metrics">
+    **Track percentiles, not just averages:**
+    
+    ```python
+    # Good: percentile-based SLA
+    assert latency_p95 < 100  # ms
+    assert latency_p99 < 200  # ms
+    
+    # Bad: mean-based SLA (hides outliers)
+    assert latency_mean < 50  # ms
+    ```
+    
+    **Alert on:**
+    - P95 latency > threshold
+    - Latency variance increase
+    - Cold start latency spikes
+  </Tab>
+  
+  <Tab title="Throughput Metrics">
+    **Monitor utilization:**
+    
+    ```python
+    utilization = request_rate / max_throughput
+    
+    if utilization > 0.7:
+        alert("High utilization - scale up")
+    ```
+    
+    **Alert on:**
+    - Utilization > 70% sustained
+    - Queue depth growing
+    - Request timeouts increasing
+  </Tab>
+  
+  <Tab title="Accuracy Metrics">
+    **Online validation:**
+    
+    ```python
+    # Compare predictions to ground truth (when available)
+    accuracy_drift = abs(current_accuracy - baseline_accuracy)
+    
+    if accuracy_drift > 0.02:
+        alert("Model accuracy degraded")
+    ```
+    
+    **Alert on:**
+    - Accuracy drop > 2%
+    - Prediction distribution shift
+    - Confidence score changes
+  </Tab>
+  
+  <Tab title="Resource Metrics">
+    **System health:**
+    
+    ```python
+    # Memory growth over time
+    memory_growth_rate = (current_mem - baseline_mem) / hours_elapsed
+    
+    if memory_growth_rate > threshold:
+        alert("Possible memory leak")
+    ```
+    
+    **Alert on:**
+    - Memory growth > 10% per hour
+    - CPU utilization > 80% sustained
+    - Disk I/O bottlenecks
+  </Tab>
+</Tabs>
+
+### Handling Model Updates
+
+<Steps>
+  <Step title="Re-benchmark New Models">
+    Don't assume new model has same performance:
+    
+    ```bash
+    # Run full benchmark suite
+    python benchmarking/statistical_benchmark.py --runs 30
+    python hardware_aware_ml/tradeoff_experiments.py
+    python benchmarking/dashboard.py
+    ```
+    
+    Compare against current production baseline.
+  </Step>
+  
+  <Step title="A/B Test in Production">
+    Deploy new model to small traffic percentage:
+    
+    ```python
+    if random.random() < 0.05:  # 5% traffic
+        prediction = new_model.predict(X)
+    else:
+        prediction = current_model.predict(X)
+    ```
+    
+    Monitor for regressions before full rollout.
+  </Step>
+  
+  <Step title="Gradual Rollout">
+    Increase traffic percentage incrementally:
+    
+    ```
+    Day 1: 5% → Monitor 24h
+    Day 2: 20% → Monitor 24h
+    Day 3: 50% → Monitor 24h
+    Day 4: 100% → Rollout complete
+    ```
+    
+    Roll back immediately if SLA violations occur.
+  </Step>
+  
+  <Step title="Document Performance Changes">
+    Track model performance over time:
+    
+    ```yaml
+    model_v1:
+      latency_p95: 92ms
+      accuracy: 0.854
+      deployed: 2024-01-15
+    
+    model_v2:
+      latency_p95: 68ms  # ↑ 26% improvement
+      accuracy: 0.856     # ↑ 0.2% improvement
+      deployed: 2024-02-10
+    ```
+  </Step>
+</Steps>
+
+## Common Pitfalls
+
+<Warning>
+  **Benchmarking on wrong hardware**
+  
+  Dev laptop results don't reflect production:
+  - Different CPU architecture (M1 vs x86)
+  - Different memory bandwidth
+  - Different power management settings
+  
+  **Solution**: Always benchmark on production-equivalent hardware.
+</Warning>
+
+<Warning>
+  **Ignoring cold start latency**
+  
+  First inference after model load is slower:
+  - JIT compilation
+  - Cache warming
+  - Lazy initialization
+  
+  **Solution**: Include `--warmup-runs` in benchmarks and monitor cold start separately.
+</Warning>
+
+<Warning>
+  **Batch size mismatch**
+  
+  Benchmarking with batch 256 but serving requests individually:
+  - Batch processing improves throughput
+  - Single requests have higher latency
+  
+  **Solution**: Benchmark with realistic batch sizes matching production traffic.
+</Warning>
+
+<Warning>
+  **Not accounting for queueing**
+  
+  Isolated inference time ≠ end-to-end latency:
+  - Queue delay under load
+  - Network latency
+  - Serialization overhead
+  
+  **Solution**: Load test with concurrent requests to measure real-world latency.
+</Warning>
+
+<Warning>
+  **Focusing only on mean metrics**
+  
+  Average latency hides outliers:
+  - P95/P99 reveals tail latency
+  - Outliers impact user experience
+  
+  **Solution**: Always track percentiles, not just means.
+</Warning>
+
+## Advanced Optimization Techniques
+
+### Operator-Level Optimization
+
+Use operator latency breakdown from `hardware_tradeoffs.csv`:
+
+```csv
+scenario,preprocess_latency_ms,linear_operator_latency_ms,postprocess_latency_ms
+sklearn_fp32,0.027,0.070,0.024
+onnx_int8,0.014,0.037,0.017
+```
+
+<AccordionGroup>
+  <Accordion title="If preprocessing dominates (> 30%)">
+    **Optimization strategies:**
+    
+    - Cache preprocessed features
+    - Move normalization to client side
+    - Use faster serialization (Protobuf vs JSON)
+    - Batch preprocessing operations
+    
+    **Example:**
+    ```python
+    # Before: 27ms preprocessing per batch
+    X_normalized = scaler.transform(X_raw)
+    
+    # After: 8ms (cache scaler params, use NumPy)
+    X_normalized = (X_raw - mean) / std
+    ```
+  </Accordion>
+  
+  <Accordion title="If linear operator dominates (> 60%)">
+    **Optimization strategies:**
+    
+    - Apply INT8 quantization
+    - Use model compression (pruning, distillation)
+    - Enable ONNX graph optimizations
+    - Consider GPU acceleration for large models
+    
+    **Example:**
+    ```bash
+    # Enable ONNX graph optimization
+    python -m onnxruntime.quantization.optimize_model \
+        --input model.onnx \
+        --output model_optimized.onnx \
+        --optimization_level 99
+    ```
+  </Accordion>
+  
+  <Accordion title="If postprocessing dominates (> 25%)">
+    **Optimization strategies:**
+    
+    - Optimize probability thresholding
+    - Use vectorized NumPy operations
+    - Minimize data copying
+    - Defer formatting until necessary
+    
+    **Example:**
+    ```python
+    # Before: 24ms postprocessing
+    predictions = [int(p > threshold) for p in probs]
+    
+    # After: 8ms (vectorized)
+    predictions = (probs >= threshold).astype(int)
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Multi-Model Serving
+
+When serving multiple models, memory and concurrency constraints differ:
+
+```python
+# Memory-constrained: prefer INT8
+total_memory_mb = num_models * memory_per_model
+max_models_fp32 = 16_000 / 3.22  # 4,969 models
+max_models_int8 = 16_000 / 2.41  # 6,639 models  ← 34% more
+```
+
+**Strategy**: Use INT8 for high-cardinality model serving (per-user models, etc.).
+
+## Performance Tuning Workflow
+
+<Steps>
+  <Step title="Establish Baseline">
+    Run comprehensive benchmarks:
+    
+    ```bash
+    python benchmarking/statistical_benchmark.py --runs 30 --batch-size 256
+    python hardware_aware_ml/tradeoff_experiments.py
+    ```
+  </Step>
+  
+  <Step title="Identify Bottleneck">
+    Analyze operator-level breakdown:
+    
+    - Preprocessing slow → optimize data loading
+    - Linear operator slow → quantize or compress model
+    - Postprocessing slow → vectorize operations
+  </Step>
+  
+  <Step title="Apply Optimization">
+    Implement targeted improvement:
+    
+    - INT8 quantization for latency
+    - Batch size tuning for throughput
+    - Memory-mapped loading for footprint
+  </Step>
+  
+  <Step title="Re-benchmark">
+    Measure improvement:
+    
+    ```bash
+    python benchmarking/statistical_benchmark.py --runs 30
+    ```
+    
+    Compare statistical significance against baseline.
+  </Step>
+  
+  <Step title="Validate Accuracy">
+    Ensure optimization didn't degrade predictions:
+    
+    ```python
+    accuracy_delta = new_accuracy - baseline_accuracy
+    assert abs(accuracy_delta) < 0.01  # < 1% change
+    ```
+  </Step>
+  
+  <Step title="Deploy and Monitor">
+    Roll out incrementally with monitoring:
+    
+    - A/B test 5% traffic
+    - Monitor latency, accuracy, errors
+    - Gradually increase to 100%
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Statistical Benchmarking" icon="chart-line" href="./benchmarking">
+    Deep dive into rigorous performance measurement methodology
+  </Card>
+  <Card title="Hardware-Aware Optimization" icon="microchip" href="./hardware-aware">
+    Explore energy profiling and operator-level analysis
+  </Card>
+</CardGroup>

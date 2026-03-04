@@ -1,0 +1,147 @@
+---
+title: 'Data Loading & Preprocessing'
+description: 'Load and preprocess training data for the machine learning pipeline'
+---
+
+## Overview
+
+The data loading module handles CSV ingestion, feature engineering, and train-test splitting with stratification to ensure balanced class distribution.
+
+## Core Functions
+
+### load_dataset()
+
+Loads the raw CSV dataset and applies feature engineering transformations.
+
+```python
+from src.data import load_dataset, load_config
+
+config = load_config("config.yaml")
+df = load_dataset(config)
+```
+
+**Implementation**: `src/data.py:26`
+
+```python
+def load_dataset(config: dict) -> pd.DataFrame:
+    data_path = config["data"]["path"]
+    df = pd.read_csv(data_path)
+
+    if test_mode_enabled():
+        max_rows = max(50, test_int("TEST_MAX_ROWS", 500))
+        df = df.head(max_rows).copy()
+
+    fcfg = FeatureConfig(
+        epsilon=float(config["features"]["epsilon"]),
+        minutes_watched_weight=float(config["features"]["engagement"]["minutes_watched_weight"]),
+        days_on_platform_weight=float(config["features"]["engagement"]["days_on_platform_weight"]),
+        courses_started_weight=float(config["features"]["engagement"]["courses_started_weight"]),
+    )
+    return add_engineered_features(df, fcfg)
+```
+
+### split_data()
+
+Splits the dataset into training and test sets with stratification.
+
+```python
+from src.data import split_data
+
+X_train, X_test, y_train, y_test = split_data(df, config)
+```
+
+**Implementation**: `src/data.py:43`
+
+```python
+def split_data(df: pd.DataFrame, config: dict) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
+    target = config["data"]["target"]
+    X = df.drop(columns=[target])
+    y = df[target]
+
+    return train_test_split(
+        X,
+        y,
+        test_size=float(config["data"]["test_size"]),
+        random_state=int(config["seed"]),
+        stratify=y,
+    )
+```
+
+## Dataset Structure
+
+The ML datasource CSV (`ml_datasource.csv`) contains the following columns:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `student_country` | string | Two-letter country code |
+| `days_on_platform` | numeric | Days since user registration |
+| `minutes_watched` | numeric | Total video minutes consumed |
+| `courses_started` | numeric | Number of courses initiated |
+| `practice_exams_started` | numeric | Practice exams attempted |
+| `practice_exams_passed` | numeric | Practice exams completed successfully |
+| `minutes_spent_on_exams` | numeric | Time spent on practice exams |
+| `purchased` | binary | Target variable (0/1) |
+
+**Sample rows**:
+
+```csv
+student_country,days_on_platform,minutes_watched,courses_started,practice_exams_started,practice_exams_passed,minutes_spent_on_exams,purchased
+US,288,358.1,1,2,2,15.81,0
+IT,5,252.4,3,4,4,12.6,1
+US,12,366.7,5,1,0,3.27,1
+```
+
+## Configuration
+
+Data loading is configured in `config.yaml`:
+
+```yaml
+seed: 42
+data:
+  path: ml_datasource.csv
+  target: purchased
+  test_size: 0.2
+```
+
+### Parameters
+
+- **path**: Path to the CSV file
+- **target**: Name of the target column for classification
+- **test_size**: Proportion of data reserved for testing (0.2 = 20%)
+- **seed**: Random seed for reproducibility
+
+## Preprocessing Pipeline
+
+The data loading process follows these steps:
+
+1. **Read CSV**: Load raw data from `ml_datasource.csv`
+2. **Feature Engineering**: Apply transformations via `add_engineered_features()` (see [Feature Engineering](/training/feature-engineering))
+3. **Train-Test Split**: Stratified split to maintain class balance
+4. **Stratification**: Ensures equal distribution of `purchased=0` and `purchased=1` in both sets
+
+## Test Mode
+
+When `TEST_MODE` is enabled, the loader limits rows for faster testing:
+
+```python
+if test_mode_enabled():
+    max_rows = max(50, test_int("TEST_MAX_ROWS", 500))
+    df = df.head(max_rows).copy()
+```
+
+## Related Functions
+
+- `load_config()`: Loads YAML configuration (`src/data.py:16`)
+- `set_global_seed()`: Sets random seeds for reproducibility (`src/data.py:21`)
+- `add_engineered_features()`: Creates derived features (see [Feature Engineering](/training/feature-engineering))
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Feature Engineering" icon="flask" href="/training/feature-engineering">
+    Learn how engineered features are created from raw data
+  </Card>
+  <Card title="Model Selection" icon="chart-network" href="/training/model-selection">
+    Explore model training and cross-validation
+  </Card>
+</CardGroup>

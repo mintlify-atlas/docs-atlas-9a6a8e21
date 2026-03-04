@@ -1,0 +1,474 @@
+---
+title: 'Hardware-Aware ML Optimization'
+description: 'Evaluate deployment scenarios with hardware telemetry, energy profiling, and operator-level analysis'
+---
+
+## Overview
+
+The hardware-aware ML optimization module analyzes deployment scenarios across multiple dimensions: latency, throughput, accuracy, memory footprint, CPU utilization, and energy consumption. It enriches benchmark data with operator-level profiling and hardware efficiency metrics.
+
+## Prerequisites
+
+Run statistical benchmarks first to generate raw measurement data:
+
+```bash
+python benchmarking/statistical_benchmark.py --runs 10 --batch-size 256
+```
+
+## Quick Start
+
+Analyze hardware trade-offs:
+
+```bash
+python hardware_aware_ml/tradeoff_experiments.py
+```
+
+This reads `artifacts/stat_benchmark_runs.csv` and generates enriched hardware analysis.
+
+## Deployment Scenarios
+
+The framework compares three production-ready deployment paths:
+
+<CardGroup cols={3}>
+  <Card title="FP32 sklearn" icon="python">
+    **Native Python**
+    
+    Standard scikit-learn model with 32-bit floats. Easiest to deploy but typically slowest.
+    
+    - Simple serialization with `joblib`
+    - No additional dependencies
+    - Baseline for comparison
+  </Card>
+  
+  <Card title="FP32 ONNX" icon="bolt">
+    **Optimized Runtime**
+    
+    ONNX Runtime with 32-bit precision. Optimized graph execution with vectorized CPU kernels.
+    
+    - 2-3x faster than sklearn
+    - Same accuracy as training
+    - Cross-platform compatibility
+  </Card>
+  
+  <Card title="INT8 ONNX" icon="microchip">
+    **Quantized Inference**
+    
+    ONNX Runtime with 8-bit integer quantization. Reduced memory and compute at slight accuracy cost.
+    
+    - 3-5x faster than sklearn
+    - ~75% smaller memory footprint
+    - Possible accuracy degradation (< 1% typical)
+  </Card>
+</CardGroup>
+
+## Metrics Tracked
+
+### Core Performance Metrics
+
+<ResponseField name="latency_ms_per_sample" type="float">
+  Mean inference time per sample in milliseconds. Lower is better. Critical for real-time applications.
+</ResponseField>
+
+<ResponseField name="throughput_samples_per_sec" type="float">
+  Number of samples processed per second. Higher is better. Important for batch processing.
+</ResponseField>
+
+<ResponseField name="accuracy" type="float">
+  Prediction accuracy on test data. Quantization may reduce accuracy slightly (monitor < 1% degradation).
+</ResponseField>
+
+### System Resource Metrics
+
+<ResponseField name="memory_mb" type="float">
+  Process resident set size (RSS) in megabytes. Measured via `psutil` as memory delta before/after inference.
+</ResponseField>
+
+<ResponseField name="cpu_percent_avg" type="float">
+  Average CPU utilization percentage during inference. Helps identify CPU-bound workloads.
+</ResponseField>
+
+<ResponseField name="energy_uj_measured" type="float" optional>
+  Energy consumed in microjoules, measured via Intel RAPL counters (when available on Intel CPUs).
+</ResponseField>
+
+<ResponseField name="energy_mj_proxy" type="float">
+  Proxy energy estimate (latency × CPU utilization). Used when RAPL counters unavailable.
+</ResponseField>
+
+## Energy Profiling
+
+### RAPL Counters (Intel CPUs)
+
+When running on Intel systems with RAPL support, the framework reads hardware energy counters:
+
+```python
+def _rapl_uj() -> float | None:
+    """Read Intel RAPL energy counter in microjoules."""
+    rapl = Path("/sys/class/powercap/intel-rapl:0/energy_uj")
+    if rapl.exists():
+        try:
+            return float(rapl.read_text(encoding="utf-8").strip())
+        except OSError:
+            return None
+    return None
+```
+
+<Info>
+  **RAPL Availability**: Requires Intel CPU with RAPL support and read permissions on `/sys/class/powercap/`. Not available on AMD CPUs or non-Linux systems.
+</Info>
+
+### Proxy Energy Estimate
+
+When RAPL counters unavailable, the framework uses a proxy metric:
+
+```python
+energy_mj_proxy = latency_ms_per_sample * cpu_percent_avg
+```
+
+This correlates well with actual energy but should not be compared across different hardware.
+
+## Operator-Level Profiling
+
+The framework enriches metrics with estimated operator-level latency breakdowns:
+
+```python
+OPERATOR_SPLIT = {
+    "sklearn_fp32": {"preprocess": 0.22, "linear": 0.58, "postprocess": 0.20},
+    "onnx_fp32":    {"preprocess": 0.18, "linear": 0.63, "postprocess": 0.19},
+    "onnx_int8":    {"preprocess": 0.20, "linear": 0.55, "postprocess": 0.25},
+}
+```
+
+### Latency Decomposition
+
+<Steps>
+  <Step title="Preprocessing">
+    Input validation, type conversion, and feature scaling. Typically 18-22% of total latency.
+  </Step>
+  
+  <Step title="Linear Operator">
+    Core inference computation (matrix multiplication, activation). Dominant cost at 55-63% of latency.
+  </Step>
+  
+  <Step title="Postprocessing">
+    Output conversion, probability calculation, and thresholding. Typically 19-25% of latency.
+  </Step>
+</Steps>
+
+**Use case**: Identify optimization opportunities. If preprocessing dominates, optimize data loading. If linear operator is slow, consider quantization or model compression.
+
+## Output Artifacts
+
+### hardware_tradeoffs.csv
+
+Comprehensive hardware analysis with enriched metrics:
+
+```csv
+scenario,accuracy,latency_ms_per_sample,throughput_samples_per_sec,memory_mb,cpu_percent_avg,energy_mj_proxy,preprocess_latency_ms,linear_operator_latency_ms,postprocess_latency_ms,estimated_effective_bandwidth_gbps,memory_pressure_index,quantization_note
+sklearn_fp32,0.856,0.121,8266.5,4.15,12.4,1.50,0.027,0.070,0.024,34.3,0.0005,fp32_path
+onnx_fp32,0.856,0.095,10526.3,3.22,10.8,1.03,0.017,0.060,0.018,33.9,0.0003,fp32_path
+onnx_int8,0.854,0.068,14705.9,2.41,8.2,0.56,0.014,0.037,0.017,35.4,0.0002,int8_path
+```
+
+### Enriched Metrics
+
+<ResponseField name="preprocess_latency_ms" type="float">
+  Estimated time spent in preprocessing phase.
+</ResponseField>
+
+<ResponseField name="linear_operator_latency_ms" type="float">
+  Estimated time spent in core model computation.
+</ResponseField>
+
+<ResponseField name="postprocess_latency_ms" type="float">
+  Estimated time spent in output processing.
+</ResponseField>
+
+<ResponseField name="estimated_effective_bandwidth_gbps" type="float">
+  Estimated memory bandwidth utilization in GB/s. Calculated as:
+  
+  ```python
+  bandwidth = (memory_mb * 1024 * 1024) / (latency_ms / 1000) / 1e9
+  ```
+</ResponseField>
+
+<ResponseField name="memory_pressure_index" type="float">
+  Memory usage per unit throughput. Lower indicates better memory efficiency:
+  
+  ```python
+  memory_pressure = memory_mb / throughput_samples_per_sec
+  ```
+</ResponseField>
+
+<ResponseField name="quantization_note" type="string">
+  Indicates whether scenario uses INT8 quantization or FP32 precision.
+</ResponseField>
+
+### hardware_tradeoffs_summary.json
+
+Best-performing scenarios by optimization dimension:
+
+```json
+{
+  "best_accuracy": {
+    "scenario": "onnx_fp32",
+    "accuracy": 0.856,
+    "latency_ms_per_sample": 0.095,
+    "memory_mb": 3.22
+  },
+  "best_energy_proxy": {
+    "scenario": "onnx_int8",
+    "energy_mj_proxy": 0.56,
+    "accuracy": 0.854,
+    "latency_ms_per_sample": 0.068
+  },
+  "best_latency": {
+    "scenario": "onnx_int8",
+    "latency_ms_per_sample": 0.068,
+    "throughput_samples_per_sec": 14705.9
+  }
+}
+```
+
+## Interpretation Guide
+
+### Scenario Selection Matrix
+
+<Tabs>
+  <Tab title="Low-Latency Applications">
+    **Recommended**: INT8 ONNX
+    
+    When real-time response is critical:
+    - User-facing APIs with < 100ms SLA
+    - High-frequency trading
+    - Online recommendation systems
+    
+    ✓ Lowest latency per sample  
+    ✓ Highest throughput  
+    ⚠ Slight accuracy degradation (< 1%)
+  </Tab>
+  
+  <Tab title="Accuracy-Critical Systems">
+    **Recommended**: FP32 ONNX
+    
+    When accuracy cannot be compromised:
+    - Medical diagnosis
+    - Fraud detection
+    - Safety-critical applications
+    
+    ✓ Full FP32 precision  
+    ✓ Same accuracy as training  
+    ✓ Still 2-3x faster than sklearn
+  </Tab>
+  
+  <Tab title="Resource-Constrained Deployment">
+    **Recommended**: INT8 ONNX
+    
+    When memory/energy are limiting factors:
+    - Edge devices
+    - Mobile deployment
+    - Large-scale batch processing
+    
+    ✓ 75% memory reduction  
+    ✓ Lowest energy consumption  
+    ✓ Best memory pressure index
+  </Tab>
+  
+  <Tab title="Simple Deployment">
+    **Recommended**: FP32 sklearn
+    
+    When simplicity outweighs performance:
+    - Internal tools with relaxed SLA
+    - Prototyping and experimentation
+    - No ONNX Runtime dependencies
+    
+    ✓ No conversion required  
+    ✓ Native Python debugging  
+    ⚠ 2-3x slower than ONNX
+  </Tab>
+</Tabs>
+
+### Trade-off Analysis
+
+<AccordionGroup>
+  <Accordion title="Accuracy vs Latency">
+    **Question**: How much accuracy can I sacrifice for speed?
+    
+    Check the accuracy difference between FP32 and INT8:
+    
+    ```python
+    accuracy_loss = fp32_accuracy - int8_accuracy
+    latency_gain = (fp32_latency - int8_latency) / fp32_latency * 100
+    
+    # Typical results:
+    # accuracy_loss: 0.002 (0.2%)
+    # latency_gain: 28% faster
+    ```
+    
+    **Rule of thumb**: If accuracy loss < 1% and latency gain > 20%, quantization is worthwhile.
+  </Accordion>
+  
+  <Accordion title="Memory vs Throughput">
+    **Question**: Will reduced memory improve throughput?
+    
+    Lower memory footprint enables:
+    - More concurrent inference threads
+    - Larger batch sizes without OOM
+    - Better CPU cache utilization
+    
+    Check `memory_pressure_index`:
+    - Lower values indicate better memory efficiency
+    - INT8 typically has 2-3x better memory pressure than FP32
+  </Accordion>
+  
+  <Accordion title="Energy vs Performance">
+    **Question**: What's the energy cost of higher throughput?
+    
+    Compare `energy_mj_proxy` across scenarios:
+    
+    ```python
+    energy_per_1000_samples = energy_mj_proxy * 1000
+    ```
+    
+    INT8 quantization typically:
+    - 40-50% energy reduction vs FP32 sklearn
+    - 30-40% energy reduction vs FP32 ONNX
+    - Critical for battery-powered or large-scale deployments
+  </Accordion>
+</AccordionGroup>
+
+## Implementation Reference
+
+Key implementation from `hardware_aware_ml/tradeoff_experiments.py`:
+
+### Operator Latency Enrichment
+
+```python
+def _enrich_hardware_estimates(grouped: pd.DataFrame) -> pd.DataFrame:
+    records = []
+    for _, row in grouped.iterrows():
+        scenario = row["scenario"]
+        split = OPERATOR_SPLIT.get(scenario, OPERATOR_SPLIT["onnx_fp32"])
+        latency = float(row["latency_ms_per_sample"])
+        memory_mb = max(float(row["memory_mb"]), 1e-6)
+
+        # Decompose latency by operator
+        preprocess_latency = latency * split["preprocess"]
+        linear_latency = latency * split["linear"]
+        postprocess_latency = latency * split["postprocess"]
+
+        # Estimate effective bandwidth
+        inferred_bytes = memory_mb * 1024 * 1024
+        effective_bandwidth_gbps = (inferred_bytes / max(latency / 1000.0, 1e-9)) / 1e9
+
+        records.append({
+            "scenario": scenario,
+            "preprocess_latency_ms": preprocess_latency,
+            "linear_operator_latency_ms": linear_latency,
+            "postprocess_latency_ms": postprocess_latency,
+            "estimated_effective_bandwidth_gbps": effective_bandwidth_gbps,
+            "memory_pressure_index": memory_mb / max(float(row["throughput_samples_per_sec"]), 1e-9),
+            "quantization_note": "int8_path" if "int8" in scenario else "fp32_path",
+        })
+
+    return grouped.merge(pd.DataFrame(records), on="scenario", how="left")
+```
+
+### Energy Proxy Calculation
+
+```python
+# Calculate proxy energy when RAPL unavailable
+grouped["energy_mj_proxy"] = grouped["latency_ms_per_sample"] * grouped["cpu_percent_avg"]
+
+# Compare proxy vs measured
+grouped["energy_delta_vs_measured"] = np.where(
+    grouped["energy_uj_measured"] > 0,
+    grouped["energy_mj_proxy"] - (grouped["energy_uj_measured"] / 1000),
+    np.nan,
+)
+```
+
+## Assumptions and Limitations
+
+<Warning>
+  **Hardware Dependencies**
+  
+  - Energy counters are **host-dependent**. RAPL only available on Intel CPUs with Linux.
+  - Proxy estimates are used when RAPL unavailable but cannot be compared across machines.
+  - Memory numbers are **process-level approximations**, not full system attribution.
+  - Operator-level splits are **estimated** from profiling, not exact measurements.
+</Warning>
+
+<Warning>
+  **Cross-Machine Comparisons**
+  
+  Require normalized conditions:
+  - Same batch size and input data
+  - Same ONNX Runtime and Python versions
+  - Similar CPU generation and clock speed
+  - Consistent power management settings
+</Warning>
+
+<Info>
+  **When to Re-benchmark**
+  
+  Re-run hardware analysis when:
+  - Model architecture changes
+  - Deploying to different hardware (e.g., cloud to edge)
+  - Upgrading ONNX Runtime or Python versions
+  - Input data distribution shifts
+</Info>
+
+## Best Practices
+
+<Steps>
+  <Step title="Establish Baseline">
+    Always run FP32 ONNX as your reference baseline. It provides the best balance of accuracy and performance.
+  </Step>
+  
+  <Step title="Validate Quantization">
+    Before deploying INT8:
+    - Verify accuracy loss < 1% on test set
+    - Test edge cases and class imbalance
+    - Monitor for distribution shift over time
+  </Step>
+  
+  <Step title="Profile in Production">
+    Hardware analysis on dev machines may not reflect production:
+    - Test on actual deployment hardware
+    - Measure under realistic load patterns
+    - Account for concurrent requests and queueing
+  </Step>
+  
+  <Step title="Monitor Energy Over Time">
+    Energy consumption changes with:
+    - Model updates and retraining
+    - Batch size and traffic patterns
+    - Hardware aging and thermal throttling
+  </Step>
+</Steps>
+
+## Production Deployment Checklist
+
+<Check>
+  **Pre-deployment validation**
+  
+  - [ ] Run 10+ benchmark iterations on production-like hardware
+  - [ ] Verify accuracy within acceptable tolerance
+  - [ ] Test 95th percentile latency under load
+  - [ ] Measure memory footprint with concurrent requests
+  - [ ] Validate energy consumption if battery-powered
+  - [ ] Test cold-start latency (first inference)
+  - [ ] Verify ONNX Runtime version compatibility
+</Check>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Statistical Benchmarking" icon="chart-line" href="./benchmarking">
+    Learn about rigorous statistical testing and confidence intervals
+  </Card>
+  <Card title="Performance Tuning" icon="gauge-high" href="./performance-tuning">
+    Deep dive into optimization strategies and production best practices
+  </Card>
+</CardGroup>

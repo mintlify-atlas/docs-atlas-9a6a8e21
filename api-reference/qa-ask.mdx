@@ -1,0 +1,271 @@
+---
+title: 'QA Ask'
+api: 'POST /qa/ask'
+---
+
+# Ask Question (Non-Streaming)
+
+Submits a student question to the RAG-based QA system and returns a complete answer with citations and quality metrics.
+
+## Endpoint
+
+```
+POST /qa/ask
+```
+
+**Alias:** `POST /qa` (also available at this path)
+
+## Request Body
+
+<ParamField body="question_lecture" type="string" required>
+  The lecture or section context for the question.
+  
+  **Validation:** `min_length=1`
+  
+  Example: "Calculations and Aggregations"
+</ParamField>
+
+<ParamField body="question_title" type="string" required>
+  The title or subject line of the student's question.
+  
+  **Validation:** `min_length=1`
+  
+  Example: "Why use SUM in GM% calculation?"
+</ParamField>
+
+<ParamField body="question_body" type="string" required>
+  The full text of the student's question with details.
+  
+  **Validation:** `min_length=1`
+  
+  Example: "I don't understand why we need to wrap the calculation in SUM() when calculating gross margin percentage. Can you explain?"
+</ParamField>
+
+## Response
+
+Returns the complete answer with quality metrics and citations.
+
+<ResponseField name="answer" type="string" required>
+  The generated answer text from the LLM, including citations at the end.
+  
+  Returns fallback text if retriever/LLM is not configured or no context found.
+</ResponseField>
+
+<ResponseField name="confidence" type="number" required>
+  Confidence score between 0.0 and 1.0 indicating answer quality.
+  
+  Computed from: retrieval coverage (40%), retrieval accuracy (40%), and answer length (20%).
+</ResponseField>
+
+<ResponseField name="citations" type="array" required>
+  Array of citation strings extracted from the answer.
+  
+  Format: `[Section: <section>, Lecture: <lecture>]`
+  
+  Empty array if no citations provided.
+</ResponseField>
+
+<ResponseField name="latency_ms" type="number" required>
+  Total request processing time in milliseconds.
+  
+  Includes retrieval, LLM inference, and post-processing.
+</ResponseField>
+
+<ResponseField name="retrieval_accuracy" type="number" required>
+  Percentage of citations that match the retrieved context.
+  
+  Value between 0.0 and 1.0. Used to detect hallucinated citations.
+</ResponseField>
+
+<ResponseField name="hallucination_flag" type="boolean" required>
+  Whether potential hallucination was detected.
+  
+  Set to `true` if citations exist but retrieval_accuracy < 1.0.
+</ResponseField>
+
+## Status Codes
+
+- **200 OK** - Question processed successfully
+
+## Example Request
+
+```bash cURL
+curl -X POST "http://localhost:8001/qa/ask" \
+  -H "Content-Type: application/json" \
+  -H "accept: application/json" \
+  -d '{
+    "question_lecture": "Calculations and Aggregations",
+    "question_title": "Why use SUM in GM% calculation?",
+    "question_body": "I do not understand why we need to wrap the calculation in SUM() when calculating gross margin percentage. Can you explain when and why we use SUM in calculated fields?"
+  }'
+```
+
+## Example Response
+
+### Successful Answer
+
+```json 200 OK
+{
+  "answer": "When calculating gross margin percentage (GM%) in Tableau, you need to use SUM() because you're working with aggregated data. The formula GM% = (Revenue - COGS) / Revenue needs to aggregate individual transaction values before performing the division.\n\nIf you don't use SUM(), Tableau will try to calculate the percentage at the row level before aggregation, which gives incorrect results. The SUM() function ensures that all revenue and COGS values are totaled first, then the percentage is calculated on those totals.\n\nFor example:\n- Correct: SUM([Revenue] - [COGS]) / SUM([Revenue])\n- Incorrect: ([Revenue] - [COGS]) / [Revenue]\n\nThis is a common pattern for all ratio and percentage calculations in Tableau when working with transactional data.\n\nCitations:\n- [Section: Calculations, Lecture: Adding a custom calculation]\n- [Section: Aggregations, Lecture: Understanding SUM and AVG]",
+  "confidence": 0.8752,
+  "citations": [
+    "[Section: Calculations, Lecture: Adding a custom calculation]",
+    "[Section: Aggregations, Lecture: Understanding SUM and AVG]"
+  ],
+  "latency_ms": 1847.3421,
+  "retrieval_accuracy": 1.0,
+  "hallucination_flag": false
+}
+```
+
+### Insufficient Context
+
+```json 200 OK
+{
+  "answer": "I don't have enough context to answer confidently.",
+  "confidence": 0.05,
+  "citations": [],
+  "latency_ms": 234.1245,
+  "retrieval_accuracy": 0.0,
+  "hallucination_flag": false
+}
+```
+
+### Hallucination Detected
+
+```json 200 OK
+{
+  "answer": "You should use SUM() for aggregating measures...\n\nCitations:\n- [Section: Advanced Features, Lecture: Data Modeling]",
+  "confidence": 0.5834,
+  "citations": [
+    "[Section: Advanced Features, Lecture: Data Modeling]"
+  ],
+  "latency_ms": 1923.8456,
+  "retrieval_accuracy": 0.0,
+  "hallucination_flag": true
+}
+```
+
+## Implementation Details
+
+Defined in `src/qa_api.py:222-279`
+
+**Request Model:** `QARequest` (src/qa_api.py:32-35)
+
+```python
+class QARequest(BaseModel):
+    question_lecture: str = Field(..., min_length=1)
+    question_title: str = Field(..., min_length=1)
+    question_body: str = Field(..., min_length=1)
+```
+
+**Response Model:** `QAResponse` (src/qa_api.py:38-44)
+
+```python
+class QAResponse(BaseModel):
+    answer: str
+    confidence: float
+    citations: List[str]
+    latency_ms: float
+    retrieval_accuracy: float
+    hallucination_flag: bool
+```
+
+## RAG Pipeline
+
+### 1. Question Formatting (src/qa_api.py:91-92)
+
+```python
+question = f"Lecture: {req.question_lecture}\nTitle: {req.question_title}\nBody: {req.question_body}"
+```
+
+### 2. Retrieval (src/qa_api.py:240)
+
+Retrieves top k=4 most relevant document chunks from Chroma vector store.
+
+### 3. Context Formatting (src/qa_api.py:95-101)
+
+Formats retrieved documents with metadata:
+
+```
+[1] Section: Calculations | Lecture: Adding a custom calculation
+<document content>
+
+[2] Section: Aggregations | Lecture: Understanding SUM and AVG
+<document content>
+```
+
+### 4. LLM Generation (src/qa_api.py:256)
+
+Uses ChatOpenAI with temperature=0 and system prompt instructing:
+- Answer only using supplied context
+- Include citations in format: `[Section: X, Lecture: Y]`
+- Say "I don't have enough context" if insufficient information
+
+### 5. Citation Extraction (src/qa_api.py:104-106)
+
+Regex pattern: `r"\[Section:\s*.*?,\s*Lecture:\s*.*?\]"`
+
+### 6. Quality Metrics
+
+**Retrieval Accuracy** (src/qa_api.py:118-123):
+```python
+valid_citations = sum(1 for c in citations if c in allowed_citations)
+accuracy = valid_citations / len(citations)
+```
+
+**Confidence Score** (src/qa_api.py:126-131):
+```python
+coverage = min(len(retrieved_docs) / 4.0, 1.0)  # 40%
+nonempty = 1.0 if len(answer) > 20 else 0.0      # 20%
+confidence = 0.4 * coverage + 0.4 * retrieval_accuracy + 0.2 * nonempty
+```
+
+**Hallucination Flag** (src/qa_api.py:259):
+```python
+hallucination_flag = bool(citations) and retrieval_accuracy < 1.0
+```
+
+## Monitoring
+
+Each request updates global monitoring metrics (src/qa_api.py:134-139):
+
+```python
+monitoring["requests_total"] += 1
+monitoring["latency_ms_total"] += latency_ms
+monitoring["retrieval_accuracy_total"] += retrieval_accuracy
+if hallucination_flag:
+    monitoring["hallucination_count"] += 1
+```
+
+Access aggregated metrics via `GET /monitoring` endpoint.
+
+## System Prompt
+
+Defined in `src/qa_api.py:78-88`:
+
+```
+You are a helpful teaching assistant for a Tableau course.
+You will receive a student question and supporting context passages.
+
+Rules:
+1) Answer ONLY using the supplied context.
+2) If context is insufficient, say exactly: "I don't have enough context to answer confidently."
+3) Add a short "Citations" section at the end.
+4) Each citation must use this format:
+   - [Section: <section>, Lecture: <lecture>]
+5) Do not invent citations.
+```
+
+## Use Cases
+
+- **Student Q&A forum** - Automated responses to common questions
+- **Teaching assistant tool** - Draft answers for instructor review
+- **Knowledge base search** - Find relevant course content
+- **Quality assurance** - Detect potential hallucinations with retrieval_accuracy
+
+## Related Endpoints
+
+- [QA Stream](/api-reference/qa-stream) - Stream answers token-by-token for real-time display
+- [QA Health](/api-reference/qa-health) - Check if QA service is ready
+- `GET /monitoring` - View aggregated QA metrics (requests, latency, hallucination rate)

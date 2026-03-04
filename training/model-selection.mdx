@@ -1,0 +1,288 @@
+---
+title: 'Model Selection & Cross-Validation'
+description: 'Train and compare multiple classification models with stratified k-fold validation'
+---
+
+## Overview
+
+The training pipeline evaluates five classification algorithms using stratified k-fold cross-validation to select the best performing model based on ROC AUC score.
+
+## Model Types
+
+Five models are trained and compared:
+
+1. **Logistic Regression**: Linear baseline model
+2. **K-Nearest Neighbors (KNN)**: Distance-based classifier
+3. **Support Vector Machine (SVM)**: Kernel-based separator
+4. **Decision Tree**: Rule-based hierarchical model
+5. **Random Forest**: Ensemble of decision trees
+
+## build_models()
+
+Creates configured instances of all five models.
+
+**Implementation**: `src/train.py:58`
+
+```python
+def build_models(config: dict) -> dict:
+    seed = int(config["seed"])
+    models = {
+        "Logistic Regression": LogisticRegression(
+            max_iter=int(config["models"]["logistic_regression"]["max_iter"]),
+            random_state=seed,
+        ),
+        "KNN": KNeighborsClassifier(
+            n_neighbors=int(config["models"]["knn"]["n_neighbors"])
+        ),
+        "SVM": SVC(
+            C=float(config["models"]["svm"]["C"]),
+            kernel=config["models"]["svm"]["kernel"],
+            gamma=config["models"]["svm"]["gamma"],
+            probability=True,
+            random_state=seed,
+        ),
+        "Decision Tree": DecisionTreeClassifier(
+            max_depth=int(config["models"]["decision_tree"]["max_depth"]),
+            min_samples_leaf=int(config["models"]["decision_tree"]["min_samples_leaf"]),
+            random_state=seed,
+        ),
+        "Random Forest": RandomForestClassifier(
+            n_estimators=int(config["models"]["random_forest"]["n_estimators"]),
+            min_samples_leaf=int(config["models"]["random_forest"]["min_samples_leaf"]),
+            random_state=seed,
+            n_jobs=-1,
+        ),
+    }
+    if test_mode_enabled():
+        return {
+            "Logistic Regression": models["Logistic Regression"],
+            "Random Forest": RandomForestClassifier(
+                n_estimators=min(50, int(config["models"]["random_forest"]["n_estimators"])),
+                min_samples_leaf=int(config["models"]["random_forest"]["min_samples_leaf"]),
+                random_state=seed,
+                n_jobs=1,
+            ),
+        }
+    return models
+```
+
+## Model Configuration
+
+All hyperparameters are defined in `config.yaml`:
+
+```yaml
+models:
+  logistic_regression:
+    max_iter: 2000
+  knn:
+    n_neighbors: 7
+  svm:
+    C: 1.0
+    kernel: rbf
+    gamma: scale
+  decision_tree:
+    max_depth: 8
+    min_samples_leaf: 10
+  random_forest:
+    n_estimators: 400
+    min_samples_leaf: 2
+```
+
+### Hyperparameter Explanations
+
+#### Logistic Regression
+- **max_iter**: Maximum iterations for convergence (2000)
+
+#### K-Nearest Neighbors
+- **n_neighbors**: Number of neighbors to consider (7)
+
+#### Support Vector Machine
+- **C**: Regularization parameter (1.0)
+- **kernel**: Kernel type - `rbf` (radial basis function)
+- **gamma**: Kernel coefficient - `scale` (auto-computed)
+- **probability**: Enable probability estimates (required for predict_proba)
+
+#### Decision Tree
+- **max_depth**: Maximum tree depth (8)
+- **min_samples_leaf**: Minimum samples per leaf node (10)
+
+#### Random Forest
+- **n_estimators**: Number of trees in forest (400)
+- **min_samples_leaf**: Minimum samples per leaf node (2)
+- **n_jobs**: Parallel jobs (-1 = use all CPUs)
+
+## Cross-Validation Setup
+
+Stratified k-fold cross-validation with 5 splits.
+
+**Implementation**: `src/train.py:126-142`
+
+```python
+cv_splits = int(config["cv"]["n_splits"])
+if test_mode_enabled():
+    cv_splits = max(2, min(3, cv_splits))
+
+cv = StratifiedKFold(
+    n_splits=cv_splits,
+    shuffle=True,
+    random_state=int(config["seed"]),
+)
+scoring = {"roc_auc": "roc_auc", "precision": "precision", "recall": "recall", "f1": "f1"}
+
+cv_rows = []
+trained = {}
+
+for name, model in models.items():
+    pipe = Pipeline(steps=[("preprocessor", preprocessor), ("model", model)])
+    scores = cross_validate(pipe, X_train, y_train, cv=cv, scoring=scoring, n_jobs=1 if test_mode_enabled() else -1)
+    cv_rows.append(
+        {
+            "model": name,
+            "cv_roc_auc_mean": float(np.mean(scores["test_roc_auc"])),
+            "cv_precision_mean": float(np.mean(scores["test_precision"])),
+            "cv_recall_mean": float(np.mean(scores["test_recall"])),
+            "cv_f1_mean": float(np.mean(scores["test_f1"])),
+        }
+    )
+    pipe.fit(X_train, y_train)
+    trained[name] = pipe
+```
+
+### Stratified K-Fold
+
+**Why Stratified?**
+- Maintains class distribution in each fold
+- Critical for imbalanced datasets
+- Ensures each fold has representative samples of both classes (purchased=0 and purchased=1)
+
+**Configuration** (`config.yaml`):
+
+```yaml
+cv:
+  n_splits: 5
+```
+
+### Evaluation Metrics
+
+Four metrics are computed for each fold:
+
+1. **ROC AUC**: Area under ROC curve (primary metric)
+2. **Precision**: True positives / (true positives + false positives)
+3. **Recall**: True positives / (true positives + false negatives)
+4. **F1**: Harmonic mean of precision and recall
+
+## Model Selection Process
+
+1. **Train all models** with 5-fold cross-validation
+2. **Compute mean scores** across folds for each metric
+3. **Rank by ROC AUC** (primary metric)
+4. **Select best model** with highest mean ROC AUC
+5. **Retrain on full training set**
+
+**Implementation**: `src/train.py:155-157`
+
+```python
+cv_df = pd.DataFrame(cv_rows).sort_values("cv_roc_auc_mean", ascending=False)
+best_model_name = cv_df.iloc[0]["model"]
+best_pipeline = trained[best_model_name]
+```
+
+## Preprocessing Pipeline
+
+Each model is wrapped in a scikit-learn Pipeline with preprocessing.
+
+**Implementation**: `src/train.py:34-55`
+
+```python
+def build_preprocessor(X_train: pd.DataFrame, config: dict) -> ColumnTransformer:
+    num_cols = X_train.select_dtypes(include=np.number).columns.tolist()
+    cat_cols = X_train.select_dtypes(exclude=np.number).columns.tolist()
+
+    numeric_transformer = Pipeline(
+        steps=[
+            ("scaler", StandardScaler()),
+        ]
+    )
+
+    categorical_transformer = Pipeline(
+        steps=[
+            ("onehot", OneHotEncoder(handle_unknown="ignore")),
+        ]
+    )
+
+    return ColumnTransformer(
+        transformers=[
+            ("num", numeric_transformer, num_cols),
+            ("cat", categorical_transformer, cat_cols),
+        ]
+    )
+```
+
+### Preprocessing Steps
+
+**Numeric Features**:
+- StandardScaler: Zero mean, unit variance normalization
+
+**Categorical Features**:
+- OneHotEncoder: Convert categories to binary vectors
+- `handle_unknown="ignore"`: Handle new categories in test data
+
+## CV Results Format
+
+Cross-validation results are stored in `metrics.json`:
+
+```json
+{
+  "cv_ranking": [
+    {
+      "model": "Random Forest",
+      "cv_roc_auc_mean": 0.892,
+      "cv_precision_mean": 0.851,
+      "cv_recall_mean": 0.723,
+      "cv_f1_mean": 0.782
+    },
+    {
+      "model": "Logistic Regression",
+      "cv_roc_auc_mean": 0.876,
+      "cv_precision_mean": 0.834,
+      "cv_recall_mean": 0.698,
+      "cv_f1_mean": 0.760
+    }
+  ]
+}
+```
+
+## Usage Example
+
+```python
+from src.train import build_models, build_preprocessor
+from src.data import load_config, load_dataset, split_data
+from sklearn.model_selection import cross_validate, StratifiedKFold
+
+# Load data
+config = load_config()
+df = load_dataset(config)
+X_train, X_test, y_train, y_test = split_data(df, config)
+
+# Build models
+models = build_models(config)
+preprocessor = build_preprocessor(X_train, config)
+
+# Cross-validate
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+for name, model in models.items():
+    pipe = Pipeline([("preprocessor", preprocessor), ("model", model)])
+    scores = cross_validate(pipe, X_train, y_train, cv=cv, scoring="roc_auc")
+    print(f"{name}: {scores['test_score'].mean():.3f}")
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Evaluation" icon="chart-line" href="/training/evaluation">
+    Learn about model evaluation and threshold calibration
+  </Card>
+  <Card title="Feature Engineering" icon="flask" href="/training/feature-engineering">
+    Understand features used by models
+  </Card>
+</CardGroup>

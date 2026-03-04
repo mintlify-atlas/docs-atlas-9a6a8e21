@@ -1,0 +1,164 @@
+---
+title: 'Healthcare Edge AI'
+description: 'Low-latency risk scoring at point-of-care under intermittent connectivity'
+icon: 'hospital'
+---
+
+## Scenario
+
+Low-latency risk scoring at point-of-care where cloud connectivity may be intermittent. This case study demonstrates edge deployment patterns for healthcare applications that require:
+
+- **Immediate response times** for clinical decision support
+- **Operation without network dependency** in areas with poor connectivity
+- **High reliability** for patient safety-critical applications
+- **Explainability** for clinical acceptance and regulatory compliance
+
+<Info>
+  This scenario prioritizes reliability and explainability over model complexity, reflecting real-world healthcare deployment constraints.
+</Info>
+
+## System Design
+
+### Architecture Overview
+
+The system implements local inference to eliminate network dependencies and ensure consistent latency:
+
+<Steps>
+  <Step title="Local CPU Inference">
+    ONNX Runtime enables CPU-based inference directly on the edge device, avoiding cloud round-trips and network latency variability.
+  </Step>
+  
+  <Step title="Conservative Thresholding">
+    Threshold selection prioritizes minimizing false negatives in high-risk triage scenarios, accepting higher false positive rates when appropriate.
+  </Step>
+  
+  <Step title="Drift Monitoring">
+    Drift indicators are exposed through API endpoints for periodic model review and retraining triggers.
+  </Step>
+</Steps>
+
+### Key Components
+
+#### ONNX Deployment
+- **Runtime**: ONNX Runtime for cross-platform CPU inference
+- **Quantization**: INT8 quantization reduces memory footprint and inference latency
+- **Model Loading**: Optimized initialization to minimize cold start times
+
+#### Edge Constraints
+```python
+# Typical edge device constraints
+Memory: 512MB - 2GB available for model + preprocessing
+CPU: 2-4 cores, no GPU acceleration
+Network: Intermittent 3G/4G or WiFi
+Latency Target: < 100ms p99
+```
+
+#### Threshold Strategy
+Conservative threshold selection based on clinical risk tolerance:
+- **High-risk triage**: Lower threshold to catch more potential cases
+- **Periodic calibration**: Drift monitoring triggers threshold review
+- **Fallback strategy**: Manual review path for edge cases
+
+## Trade-offs and Bottlenecks
+
+<AccordionGroup>
+  <Accordion title="Reliability vs. Model Complexity">
+    Simpler models (linear, tree-based) are preferred over deep neural networks to improve:
+    - **Explainability**: Feature importance visible to clinicians
+    - **Calibration stability**: Less sensitivity to distribution shift
+    - **Resource efficiency**: Lower memory and compute requirements
+    
+    This trade-off accepts slightly lower accuracy for significantly improved reliability and clinical trust.
+  </Accordion>
+  
+  <Accordion title="Quantization Impact">
+    INT8 quantization provides substantial benefits:
+    - **Memory reduction**: 4x smaller model size (FP32 → INT8)
+    - **Latency improvement**: 2-3x faster inference on CPU
+    - **Accuracy impact**: &lt;1% accuracy loss on marginal predictions
+    
+    Critical threshold decisions may shift slightly, requiring recalibration after quantization.
+  </Accordion>
+  
+  <Accordion title="Cold Start Performance">
+    Initial inference latency is dominated by:
+    - **Model loading**: 50-200ms depending on model size
+    - **Runtime initialization**: 30-100ms for ONNX Runtime setup
+    - **First inference**: Additional JIT compilation overhead
+    
+    Mitigation strategies include model preloading at device startup and persistent runtime instances.
+  </Accordion>
+</AccordionGroup>
+
+## Deployment Considerations
+
+### Edge Infrastructure
+
+<CardGroup cols={2}>
+  <Card title="Hardware Requirements" icon="server">
+    - ARM or x86 CPU with 2+ cores
+    - 512MB+ available RAM
+    - Local storage for model artifacts
+    - Battery life considerations for mobile devices
+  </Card>
+  
+  <Card title="Software Stack" icon="layer-group">
+    - ONNX Runtime (CPU provider)
+    - Lightweight HTTP server
+    - Local preprocessing pipeline
+    - Drift detection module
+  </Card>
+</CardGroup>
+
+### Connectivity Patterns
+
+**Online Mode** (when connected):
+- Upload prediction logs for monitoring
+- Download model updates
+- Sync drift metrics to central platform
+
+**Offline Mode** (intermittent connectivity):
+- Fully functional local inference
+- Queue telemetry for later upload
+- Fallback to last synced model version
+
+## Assumptions and Limitations
+
+<Warning>
+  **Critical Assumptions**
+  
+  These limitations must be validated before deployment:
+</Warning>
+
+1. **Input Schema Stability**
+   - Feature schema is stable and validated upstream
+   - Missing values handled by preprocessing layer
+   - Type validation before inference
+
+2. **Memory Availability**
+   - Edge nodes have sufficient memory for model plus preprocessing overhead
+   - Memory profiling performed under peak load conditions
+   - Swap/paging disabled for deterministic latency
+
+3. **Model Scope**
+   - Model trained on population representative of deployment context
+   - Regular retraining cycle to address distribution drift
+   - Clear escalation path when model confidence is low
+
+4. **Regulatory Compliance**
+   - Clinical validation performed before deployment
+   - Audit trail maintained for all predictions
+   - Human-in-the-loop for final clinical decisions
+
+## Implementation References
+
+This case study leverages repository components from:
+
+- **ONNX Export**: `workflows/onnx_deployment.py` for model conversion
+- **Quantization**: `workflows/onnx_deployment.py` INT8 quantization pipeline
+- **Drift Detection**: `ml_pipelines/data_quality_checks.py` for monitoring
+- **API Endpoints**: Standard prediction API with drift indicator exposure
+
+<Tip>
+  Review the ONNX deployment workflow to see concrete implementation of quantization and edge optimization techniques.
+</Tip>

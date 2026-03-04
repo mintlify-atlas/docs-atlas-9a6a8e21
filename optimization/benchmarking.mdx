@@ -1,0 +1,341 @@
+---
+title: 'Statistical Benchmarking Framework'
+description: 'Rigorous performance measurement with bootstrap confidence intervals and statistical significance testing'
+---
+
+## Overview
+
+The statistical benchmarking framework provides repeatable, statistically rigorous performance measurements across multiple deployment scenarios. It uses bootstrap confidence intervals and paired statistical tests to compare model performance with quantified uncertainty.
+
+## Quick Start
+
+Run the statistical benchmark with default parameters:
+
+```bash
+python benchmarking/statistical_benchmark.py --runs 10 --batch-size 256 --warmup-runs 1 --confidence 0.95
+```
+
+## Command-Line Arguments
+
+### Required Parameters
+
+<ParamField path="--runs" type="int" default="10">
+  Number of benchmark runs to execute. Must be >= 2 for meaningful variance calculation and paired comparisons. More runs provide better statistical power but increase execution time.
+</ParamField>
+
+<ParamField path="--batch-size" type="int" default="256">
+  Number of samples per benchmark run. Use a consistent batch size across experiments for valid comparisons.
+</ParamField>
+
+### Optional Parameters
+
+<ParamField path="--warmup-runs" type="int" default="1">
+  Number of warmup iterations before timed runs. Warmup runs allow JIT compilation and cache warming without affecting measurements.
+</ParamField>
+
+<ParamField path="--confidence" type="float" default="0.95">
+  Confidence level for bootstrap confidence intervals (typically 0.95 or 0.99).
+</ParamField>
+
+<ParamField path="--bootstrap-samples" type="int" default="1000">
+  Number of bootstrap resamples for confidence interval estimation. Higher values provide more stable intervals.
+</ParamField>
+
+## Benchmark Scenarios
+
+The framework automatically benchmarks three deployment scenarios:
+
+<CardGroup cols={3}>
+  <Card title="sklearn_fp32" icon="python">
+    Native scikit-learn model with 32-bit floating point precision. Baseline Python implementation.
+  </Card>
+  <Card title="onnx_fp32" icon="bolt">
+    ONNX Runtime with 32-bit floating point. Optimized graph execution with CPU kernels.
+  </Card>
+  <Card title="onnx_int8" icon="microchip">
+    ONNX Runtime with 8-bit integer quantization. Reduced precision for faster inference and lower memory footprint.
+  </Card>
+</CardGroup>
+
+## Metrics Tracked
+
+### Performance Metrics
+
+- **Latency**: Mean milliseconds per sample
+- **Throughput**: Samples processed per second
+- **Accuracy**: Prediction accuracy on test data
+
+### System Metrics
+
+- **Memory**: Process RSS memory delta (requires `psutil`)
+- **CPU Utilization**: Average CPU percentage during inference
+- **Energy**: Microjoules consumed (RAPL counters when available on Intel systems)
+
+## Output Artifacts
+
+The benchmark generates four output files in the `artifacts/` directory:
+
+### 1. stat_benchmark_runs.csv
+
+Raw measurements from all runs:
+
+```csv
+scenario,run,latency_ms_per_sample,throughput_samples_per_sec,accuracy,memory_mb_measured,cpu_percent_avg,energy_uj_measured
+sklearn_fp32,0,0.123,8130.08,0.856,4.2,12.5,1250.0
+sklearn_fp32,1,0.119,8403.36,0.856,4.1,12.3,1230.0
+...
+```
+
+### 2. stat_benchmark_summary.csv
+
+Bootstrap confidence intervals for each scenario:
+
+```csv
+scenario,latency_ms_per_sample_mean,latency_ms_per_sample_ci_low,latency_ms_per_sample_ci_high,throughput_samples_per_sec_mean,...
+sklearn_fp32,0.121,0.118,0.124,8266.5,...
+onnx_fp32,0.095,0.092,0.098,10526.3,...
+onnx_int8,0.068,0.065,0.071,14705.9,...
+```
+
+**Key fields:**
+- `*_mean`: Average value across runs
+- `*_ci_low`: Lower bound of bootstrap confidence interval
+- `*_ci_high`: Upper bound of bootstrap confidence interval
+
+### 3. statistical_comparisons.csv
+
+Paired statistical tests comparing each scenario to `onnx_fp32` baseline:
+
+```csv
+baseline,scenario,metric,mean_diff,t_stat,p_value,cohens_d_paired
+onnx_fp32,onnx_int8,latency_ms_per_sample,-0.027,-12.45,0.0001,1.87
+onnx_fp32,sklearn_fp32,latency_ms_per_sample,0.026,9.23,0.0003,1.45
+...
+```
+
+**Interpretation:**
+- **mean_diff**: Average difference (scenario - baseline). Negative means scenario is faster/better.
+- **p_value**: Statistical significance. Values < 0.05 indicate significant differences.
+- **cohens_d_paired**: Effect size. |d| > 0.8 is large, 0.5-0.8 medium, < 0.5 small.
+
+### 4. stat_benchmark_report.json
+
+Experiment metadata and configuration:
+
+```json
+{
+  "runs": 10,
+  "batch_size": 256,
+  "warmup_runs": 1,
+  "confidence": 0.95,
+  "bootstrap_samples": 1000,
+  "host": {
+    "platform": "Linux-5.15.0-x86_64",
+    "python": "3.10.12"
+  },
+  "hardware_telemetry": {
+    "psutil_enabled": true,
+    "rapl_enabled": true
+  }
+}
+```
+
+## Statistical Methods
+
+### Bootstrap Confidence Intervals
+
+The framework uses bootstrap resampling to estimate confidence intervals:
+
+```python
+def _bootstrap_ci(values: np.ndarray, confidence: float = 0.95, n_boot: int = 1000):
+    rng = np.random.default_rng(42)
+    means = []
+    for _ in range(n_boot):
+        sample = rng.choice(values, size=len(values), replace=True)
+        means.append(float(sample.mean()))
+    alpha = 1 - confidence
+    return np.quantile(means, alpha / 2), np.quantile(means, 1 - alpha / 2)
+```
+
+**Advantages:**
+- Non-parametric (no distribution assumptions)
+- Quantifies uncertainty in mean estimates
+- Valid for small sample sizes
+
+### Paired t-tests
+
+For scenario comparisons, the framework uses paired t-tests:
+
+```python
+from scipy import stats
+t_stat, p_val = stats.ttest_rel(baseline_values, scenario_values)
+```
+
+**Why paired tests?**
+- Same test data and hardware for all runs
+- Higher statistical power by controlling for run-to-run variation
+- Detects smaller performance differences
+
+### Effect Size (Cohen's d)
+
+Effect size quantifies the practical magnitude of differences:
+
+```python
+diff = scenario_values - baseline_values
+cohens_d = diff.mean() / (diff.std(ddof=1) + 1e-12)
+```
+
+**Interpretation:**
+- |d| < 0.5: Small effect (may not be practically significant)
+- 0.5 ≤ |d| < 0.8: Medium effect
+- |d| ≥ 0.8: Large effect (likely meaningful in production)
+
+## Visualization Dashboard
+
+Generate visual summaries and composite scores:
+
+```bash
+python benchmarking/dashboard.py
+```
+
+### Outputs
+
+<Steps>
+  <Step title="benchmark_dashboard.csv">
+    Enriched metrics with composite scoring:
+    
+    ```python
+    composite_score = (
+        0.4 * accuracy +
+        0.2 * (1 / (1 + latency_ms_per_sample)) +
+        0.2 * (1 / (1 + memory_mb)) +
+        0.2 * (1 / (1 + energy_mj_proxy))
+    )
+    ```
+  </Step>
+  
+  <Step title="benchmark_summary.json">
+    Best-performing scenarios by dimension:
+    - `best_composite`: Highest overall score
+    - `lowest_latency`: Fastest inference
+    - `lowest_memory`: Smallest footprint
+    - `lowest_energy`: Most energy-efficient
+  </Step>
+  
+  <Step title="benchmark_tradeoff.png">
+    Scatter plot visualizing latency-accuracy trade-offs across scenarios.
+  </Step>
+</Steps>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Fixed seeds for reproducibility">
+    The framework uses `np.random.default_rng(42)` for bootstrap sampling. Use consistent random seeds in your model training pipeline for end-to-end reproducibility.
+  </Accordion>
+  
+  <Accordion title="Minimum run requirements">
+    - Require at least 5 runs for preliminary analysis
+    - Use 10+ runs for statistical comparisons
+    - Run 30+ iterations for publication-quality benchmarks
+  </Accordion>
+  
+  <Accordion title="Interpreting results">
+    Look at both central tendency (mean) and dispersion (confidence intervals):
+    - Wide confidence intervals suggest high variability
+    - Check if confidence intervals overlap between scenarios
+    - Don't rank scenarios solely on mean values
+  </Accordion>
+  
+  <Accordion title="Hardware consistency">
+    - Run all scenarios on the same hardware
+    - Minimize background processes during benchmarking
+    - Use consistent power settings (disable CPU frequency scaling if possible)
+  </Accordion>
+</AccordionGroup>
+
+## Quality Gates
+
+Recommended thresholds for release decisions:
+
+<Warning>
+  **Statistical Significance ≠ Practical Significance**
+  
+  A p-value < 0.05 only tells you the difference is real, not that it matters. Check effect sizes and business impact.
+</Warning>
+
+<Check>
+  - **p-value < 0.05**: Difference is statistically significant
+  - **|Cohen's d| > 0.5**: Difference is practically meaningful
+  - **Non-overlapping CIs**: Strong evidence of performance gap
+  - **Throughput delta > 10%**: Likely worth productionizing
+</Check>
+
+## Assumptions and Limitations
+
+<Warning>
+  - Statistical tests assume **repeated runs on comparable host conditions**
+  - RAPL energy counters are **Intel-specific** and may not be available
+  - Memory measurements are **process-level approximations**, not full system attribution
+  - Throughput deltas **below measurement noise** should not drive release decisions
+  - Cross-machine comparisons require normalized workload and runtime versions
+</Warning>
+
+## Implementation Reference
+
+Key implementation details from `benchmarking/statistical_benchmark.py`:
+
+### Single Run Execution
+
+```python
+def _run_once(session, X, threshold: float, y_true) -> dict:
+    mem_before = psutil.Process(os.getpid()).memory_info().rss if psutil else None
+    cpu_before = psutil.cpu_percent(interval=None) if psutil else None
+    e0 = _rapl_uj()  # Read RAPL energy counter
+
+    t0 = time.perf_counter()
+    # Run inference (ONNX or sklearn)
+    if isinstance(session, ort.InferenceSession):
+        outputs = session.run(None, _to_onnx_inputs(X))
+        # Extract probability outputs
+    else:
+        probs = session.predict_proba(X)[:, 1]
+    elapsed = time.perf_counter() - t0
+
+    e1 = _rapl_uj()
+    mem_after = psutil.Process(os.getpid()).memory_info().rss if psutil else None
+    
+    preds = (probs >= threshold).astype(int)
+    return {
+        "latency_ms_per_sample": (elapsed / max(len(X), 1)) * 1000,
+        "throughput_samples_per_sec": len(X) / elapsed if elapsed > 0 else 0.0,
+        "accuracy": float((preds == y_true).mean()),
+        "memory_mb_measured": (mem_after - mem_before) / (1024 * 1024),
+        "energy_uj_measured": (e1 - e0) if e0 and e1 else None,
+    }
+```
+
+### RAPL Energy Profiling
+
+```python
+def _rapl_uj() -> float | None:
+    """Read Intel RAPL energy counter in microjoules."""
+    rapl = Path("/sys/class/powercap/intel-rapl:0/energy_uj")
+    if rapl.exists():
+        try:
+            return float(rapl.read_text(encoding="utf-8").strip())
+        except OSError:
+            return None
+    return None
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Hardware-Aware Optimization" icon="microchip" href="./hardware-aware">
+    Analyze hardware-level trade-offs with detailed telemetry
+  </Card>
+  <Card title="Performance Tuning" icon="gauge-high" href="./performance-tuning">
+    Learn strategies for interpreting and acting on benchmark results
+  </Card>
+</CardGroup>

@@ -1,0 +1,257 @@
+---
+title: 'Embedded Digit Classifier'
+description: 'Digit recognition on memory-constrained edge hardware'
+icon: 'microchip'
+---
+
+## Scenario
+
+Digit recognition on memory-constrained edge hardware demonstrates the extreme end of resource-limited deployment. This case study addresses:
+
+- **Strict memory budgets** (often < 1MB for model + runtime)
+- **Limited compute capacity** (low-power CPUs without acceleration)
+- **Deterministic latency requirements** for real-time processing
+- **Power consumption constraints** for battery-operated devices
+
+<Info>
+  This scenario represents embedded systems like IoT devices, microcontrollers, or edge sensors where every byte and CPU cycle matters.
+</Info>
+
+## System Design Decisions
+
+### Architecture Overview
+
+The embedded digit classifier implements aggressive optimization for minimal resource footprint:
+
+<Steps>
+  <Step title="ONNX Export with CPU-Only Path">
+    Model exported to ONNX format with CPU-only operators, ensuring compatibility with resource-constrained devices without GPU/NPU.
+  </Step>
+  
+  <Step title="Small Batch-Size Inference">
+    Single-sample or micro-batch inference (batch size ≤ 4) for deterministic tail latency and minimal memory allocation.
+  </Step>
+  
+  <Step title="Accuracy/Latency Frontier Tracking">
+    Benchmark dashboard artifacts track the Pareto frontier of accuracy vs. latency trade-offs across model configurations.
+  </Step>
+</Steps>
+
+### Optimization Strategy
+
+#### Model Architecture
+```python
+# Typical embedded model constraints
+Model Size: < 1MB (quantized)
+Parameters: ~10K-100K (vs. millions in full models)
+Layers: Shallow network (3-5 layers)
+Operators: Basic ops only (Conv2D, Dense, ReLU, MaxPool)
+```
+
+#### Memory Budget
+<CardGroup cols={2}>
+  <Card title="Static Allocation" icon="memory">
+    **Model Weights**: 200KB - 800KB (quantized)
+    
+    **Runtime Overhead**: 100KB - 300KB
+    
+    **Activation Memory**: 50KB - 200KB per inference
+    
+    **Total Budget**: ~1MB peak memory usage
+  </Card>
+  
+  <Card title="Optimization Techniques" icon="bolt">
+    **Quantization**: FP32 → INT8 (4x reduction)
+    
+    **Operator Fusion**: Reduce intermediate allocations
+    
+    **In-place Operations**: Minimize memory copies
+    
+    **Static Buffers**: Preallocated, reused across inferences
+  </Card>
+</CardGroup>
+
+#### Quantization Benefits
+
+INT8 quantization provides critical advantages for embedded deployment:
+
+<Tabs>
+  <Tab title="Memory">
+    - **4x smaller** model weights (FP32 → INT8)
+    - Reduced activation memory requirements
+    - Lower bandwidth between memory hierarchy levels
+    - Enables on-chip caching of entire model
+  </Tab>
+  
+  <Tab title="Performance">
+    - **2-4x faster** inference on embedded CPUs
+    - Better cache locality due to smaller footprint
+    - Reduced memory bandwidth pressure
+    - Lower power consumption per inference
+  </Tab>
+  
+  <Tab title="Accuracy">
+    - Minimal impact on digit classification (~0.5% accuracy loss)
+    - Calibration dataset representative of deployment distribution
+    - Per-channel quantization preserves precision where needed
+  </Tab>
+</Tabs>
+
+## Trade-offs and Bottlenecks
+
+<AccordionGroup>
+  <Accordion title="Static Memory Budgets">
+    **Advantages**:
+    - Simplified deployment with predictable resource usage
+    - No dynamic allocation overhead or fragmentation
+    - Deterministic latency without garbage collection pauses
+    
+    **Limitations**:
+    - Constrains model capacity and complexity
+    - Cannot handle variable input sizes efficiently
+    - Requires careful profiling to set correct buffer sizes
+    
+    **Design Choice**: Accept model scale limitations in exchange for deployment simplicity and latency predictability.
+  </Accordion>
+  
+  <Accordion title="Cache Locality Impact">
+    **Performance Characteristics**:
+    - Cache misses dominate inference time on small cores
+    - Quantized models fit in L1/L2 cache → 3-5x speedup
+    - Sequential memory access patterns critical for throughput
+    
+    **Optimization Strategy**:
+    - Operator fusion reduces intermediate writes
+    - Weight layout optimized for access patterns
+    - Activation reuse minimizes memory traffic
+    
+    **Measurement**: Profiling shows cache locality affects throughput more than FLOPS on target devices.
+  </Accordion>
+  
+  <Accordion title="Quantization Artifacts">
+    **Bandwidth Reduction**:
+    - 4x less data movement between memory levels
+    - Critical for bandwidth-constrained embedded systems
+    - Enables streaming inference with smaller buffers
+    
+    **Precision Loss**:
+    - Minor accuracy degradation (&lt;1% for digit classification)
+    - Calibration required to minimize distribution shift
+    - Per-layer quantization sensitivity analysis needed
+    
+    **Trade-off**: Substantial performance gains justify minimal accuracy loss for embedded use cases.
+  </Accordion>
+</AccordionGroup>
+
+## Performance Benchmarking
+
+### Accuracy/Latency Frontier
+
+The system tracks multiple model configurations on the Pareto frontier:
+
+| Configuration | Accuracy | Latency (ms) | Memory (KB) | Notes |
+|--------------|----------|--------------|-------------|-------|
+| Baseline FP32 | 98.5% | 45 | 3200 | Too large for target |
+| Pruned FP32 | 97.8% | 32 | 1600 | Still memory-constrained |
+| **INT8 Quantized** | **97.3%** | **12** | **800** | **Deployed config** |
+| Aggressive INT8 | 95.1% | 8 | 400 | Accuracy unacceptable |
+
+<Tip>
+  The INT8 quantized configuration provides the best balance of accuracy, latency, and memory footprint for the target embedded platform.
+</Tip>
+
+### Latency Breakdown
+
+```python
+# Typical inference latency profile (INT8 quantized)
+Preprocessing: 2ms      # Input normalization
+Model Load (cold): 15ms  # One-time initialization
+Inference: 8ms          # Forward pass
+Postprocessing: 1ms     # Argmax + formatting
+─────────────────────
+Total (warm): 11ms      # After initialization
+Total (cold): 26ms      # First inference
+```
+
+## Assumptions and Limitations
+
+<Warning>
+  **Deployment Constraints**
+  
+  These assumptions must hold for the system to function correctly:
+</Warning>
+
+### Workload Characteristics
+
+1. **Request Pattern**
+   - Short-lived requests with limited concurrent sessions
+   - No batch processing required (single-sample inference)
+   - Predictable inter-arrival times or request queuing upstream
+
+2. **Resource Availability**
+   - Target device has ≥1MB RAM available
+   - CPU supports required ONNX operators natively
+   - Sufficient compute headroom for peak load
+
+### Operator Support
+
+<Accordion title="ONNX Runtime Version Dependencies">
+  **Critical Limitation**: Operator support is bounded by ONNX Runtime version on target devices.
+  
+  **Considerations**:
+  - Embedded ONNX Runtime may not support all operators
+  - Custom operators require target-specific implementation
+  - Operator version compatibility must be validated
+  - Fallback to CPU reference implementation may be slow
+  
+  **Mitigation**:
+  - Export model with target ONNX opset version
+  - Validate operator support during deployment planning
+  - Test on actual target hardware early in development
+</Accordion>
+
+### Model Limitations
+
+- **Input Resolution**: Fixed 28x28 grayscale images (MNIST format)
+- **Digit Range**: 0-9 only, no multi-digit sequences
+- **Background Assumptions**: Clean, centered digits on plain background
+- **No Adversarial Robustness**: Minimal validation against perturbations
+
+## Implementation References
+
+This case study leverages repository components from:
+
+- **ONNX Export**: `workflows/onnx_deployment.py` for model conversion and quantization
+- **Benchmark Pipeline**: `benchmark_pipeline.py` for accuracy/latency frontier tracking
+- **Digit Classifier**: `models/digit_classifier.py` baseline model architecture
+- **Quantization Validation**: `workflows/onnx_deployment.py` calibration and accuracy validation
+
+<CardGroup cols={2}>
+  <Card title="View ONNX Workflow" icon="code" href="/workflows/onnx-deployment">
+    Explore the ONNX export and quantization pipeline
+  </Card>
+  
+  <Card title="Benchmark System" icon="chart-bar" href="/pipelines/benchmarking">
+    Learn about performance tracking and frontier analysis
+  </Card>
+</CardGroup>
+
+## Key Takeaways
+
+<Steps>
+  <Step title="Quantization is Essential">
+    INT8 quantization reduces memory by 4x and improves latency by 2-4x with minimal accuracy loss, making it mandatory for embedded deployment.
+  </Step>
+  
+  <Step title="Cache Locality Matters More Than FLOPS">
+    On small cores, memory access patterns and cache utilization dominate performance more than raw compute capacity.
+  </Step>
+  
+  <Step title="Static Budgets Simplify Deployment">
+    Accepting model scale limitations in exchange for predictable resource usage and deterministic latency is a worthwhile trade-off.
+  </Step>
+  
+  <Step title="Early Hardware Validation">
+    Test on actual target hardware early—embedded platforms have unique constraints that don't appear in desktop/cloud environments.
+  </Step>
+</Steps>

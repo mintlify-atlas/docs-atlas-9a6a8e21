@@ -1,0 +1,226 @@
+---
+title: 'Batch Prediction'
+api: 'POST /batch_predict'
+---
+
+# Batch Purchase Predictions
+
+Processes multiple student records in a single request for efficient bulk predictions.
+
+## Endpoint
+
+```
+POST /batch_predict
+```
+
+## Request Body
+
+<ParamField body="records" type="array" required>
+  Array of student engagement records. Must contain at least 1 record.
+  
+  **Validation:** `min_length=1`
+  
+  Each record must be a valid `PredictRequest` object.
+</ParamField>
+
+<Expandable title="Record Schema">
+  Each object in the `records` array must contain:
+  
+  <ParamField body="student_country" type="string" required>
+    Student's country. Length: 2-64 characters.
+  </ParamField>
+  
+  <ParamField body="days_on_platform" type="integer" required>
+    Days since registration. Must be >= 0.
+  </ParamField>
+  
+  <ParamField body="minutes_watched" type="number" required>
+    Total video minutes watched. Must be >= 0.0.
+  </ParamField>
+  
+  <ParamField body="courses_started" type="integer" required>
+    Number of courses started. Must be >= 0.
+  </ParamField>
+  
+  <ParamField body="practice_exams_started" type="integer" required>
+    Number of exams started. Must be >= 0.
+  </ParamField>
+  
+  <ParamField body="practice_exams_passed" type="integer" required>
+    Number of exams passed. Must be &gt;= 0 and &lt;= practice_exams_started.
+  </ParamField>
+  
+  <ParamField body="minutes_spent_on_exams" type="number" required>
+    Total exam minutes. Must be >= 0.0.
+  </ParamField>
+</Expandable>
+
+## Response
+
+Returns an array of predictions matching the order of input records.
+
+<ResponseField name="predictions" type="array" required>
+  Array of prediction results, one for each input record in the same order.
+</ResponseField>
+
+<Expandable title="Prediction Schema">
+  Each prediction object contains:
+  
+  <ResponseField name="predicted_purchase_probability" type="number" required>
+    Probability score between 0.0 and 1.0.
+  </ResponseField>
+  
+  <ResponseField name="predicted_purchase" type="integer" required>
+    Binary classification: 1 (purchase) or 0 (no purchase).
+  </ResponseField>
+</Expandable>
+
+## Status Codes
+
+- **200 OK** - Batch prediction successful
+- **422 Unprocessable Entity** - Validation error in one or more records
+- **503 Service Unavailable** - Model not loaded
+
+## Example Request
+
+```bash cURL
+curl -X POST "http://localhost:8000/batch_predict" \
+  -H "Content-Type: application/json" \
+  -H "accept: application/json" \
+  -d '{
+    "records": [
+      {
+        "student_country": "United States",
+        "days_on_platform": 45,
+        "minutes_watched": 320.5,
+        "courses_started": 3,
+        "practice_exams_started": 5,
+        "practice_exams_passed": 3,
+        "minutes_spent_on_exams": 87.2
+      },
+      {
+        "student_country": "Canada",
+        "days_on_platform": 12,
+        "minutes_watched": 45.0,
+        "courses_started": 1,
+        "practice_exams_started": 0,
+        "practice_exams_passed": 0,
+        "minutes_spent_on_exams": 0.0
+      },
+      {
+        "student_country": "United Kingdom",
+        "days_on_platform": 90,
+        "minutes_watched": 1250.0,
+        "courses_started": 8,
+        "practice_exams_started": 12,
+        "practice_exams_passed": 10,
+        "minutes_spent_on_exams": 340.5
+      }
+    ]
+  }'
+```
+
+## Example Response
+
+```json 200 OK
+{
+  "predictions": [
+    {
+      "predicted_purchase_probability": 0.7834,
+      "predicted_purchase": 1
+    },
+    {
+      "predicted_purchase_probability": 0.2145,
+      "predicted_purchase": 0
+    },
+    {
+      "predicted_purchase_probability": 0.9512,
+      "predicted_purchase": 1
+    }
+  ]
+}
+```
+
+## Error Responses
+
+### Validation Error
+
+```json 422 Unprocessable Entity
+{
+  "detail": "practice_exams_passed cannot exceed practice_exams_started."
+}
+```
+
+This error occurs when any record violates the business rule constraint.
+
+### Empty Records Array
+
+```json 422 Unprocessable Entity
+{
+  "detail": [
+    {
+      "loc": ["body", "records"],
+      "msg": "ensure this value has at least 1 items",
+      "type": "value_error.list.min_items"
+    }
+  ]
+}
+```
+
+### Service Unavailable
+
+```json 503 Service Unavailable
+{
+  "detail": "Model is not loaded."
+}
+```
+
+## Implementation Details
+
+Defined in `src/api.py:292-297`
+
+**Request Model:** `BatchPredictRequest` (src/api.py:42-43)
+
+```python
+class BatchPredictRequest(BaseModel):
+    records: List[PredictRequest] = Field(..., min_length=1)
+```
+
+**Response Model:** `BatchPredictResponse` (src/api.py:46-47)
+
+```python
+class BatchPredictResponse(BaseModel):
+    predictions: List[PredictResponse]
+```
+
+## Performance Considerations
+
+### Vectorized Processing
+
+The endpoint uses pandas DataFrame operations and NumPy for efficient batch processing:
+
+1. **Single DataFrame conversion** - All records converted to DataFrame once
+2. **Vectorized validation** - Business rules checked across all records simultaneously
+3. **Batch feature engineering** - Features computed for all records in parallel
+4. **Batch prediction** - Model inference runs on entire batch
+
+This approach is significantly faster than calling `/predict` multiple times.
+
+### Monitoring Updates
+
+All predictions are tracked atomically with thread-safe locking:
+- Feature distributions updated for drift detection
+- Prediction rates tracked for model performance monitoring
+- Individual predictions logged to `artifacts/prediction_log.jsonl`
+
+## Use Cases
+
+- **Daily scoring jobs** - Score all active students each morning
+- **Campaign targeting** - Identify high-probability purchasers for email campaigns
+- **Cohort analysis** - Analyze purchase propensity across student segments
+- **A/B testing** - Generate predictions for experimental groups
+
+## Related Endpoints
+
+- [Single Predict](/api-reference/predict) - Process individual predictions
+- [Drift Monitoring](/api-reference/drift-monitoring) - Monitor accumulated prediction data

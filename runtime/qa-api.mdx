@@ -1,0 +1,278 @@
+---
+title: Question-Answering API
+description: RAG-powered QA service using LangChain, ChromaDB, and OpenAI
+---
+
+## Overview
+
+The QA API is a FastAPI service that provides intelligent question-answering for a Tableau course using Retrieval-Augmented Generation (RAG). The service embeds course transcripts, retrieves relevant context, and generates answers with citation tracking and hallucination detection.
+
+## Architecture
+
+- **Framework**: FastAPI 1.1.0
+- **LLM Provider**: OpenAI (configurable model)
+- **Vector Store**: ChromaDB with OpenAI embeddings
+- **Orchestration**: LangChain for RAG pipeline
+- **Document Processing**: Markdown header splitting + token chunking
+
+## RAG Pipeline
+
+1. **Document Loading**: PDF transcripts loaded via `PyPDFLoader`
+2. **Splitting**: Markdown header splitter (section/lecture) + token splitter (350 tokens, 50 overlap)
+3. **Embedding**: OpenAI embeddings (`text-embedding-3-small` default)
+4. **Storage**: ChromaDB collection (`tableau_qa_collection`)
+5. **Retrieval**: Top-k=4 most relevant chunks
+6. **Generation**: ChatOpenAI with zero temperature for deterministic answers
+
+## Request/Response Schemas
+
+### QARequest
+
+```python
+class QARequest(BaseModel):
+    question_lecture: str = Field(..., min_length=1)
+    question_title: str = Field(..., min_length=1)
+    question_body: str = Field(..., min_length=1)
+```
+
+### QAResponse
+
+```python
+class QAResponse(BaseModel):
+    answer: str
+    confidence: float
+    citations: List[str]
+    latency_ms: float
+    retrieval_accuracy: float
+    hallucination_flag: bool
+```
+
+## API Endpoints
+
+### POST /qa
+
+Synchronous question-answering endpoint.
+
+**Request Example**:
+
+```bash
+curl -X POST http://localhost:8001/qa \
+  -H "Content-Type: application/json" \
+  -d '{
+    "question_lecture": "Calculations",
+    "question_title": "Understanding SUM in GM%",
+    "question_body": "Why do we need to wrap numerator and denominator in SUM() for gross margin percentage calculations?"
+  }'
+```
+
+**Response Example**:
+
+```json
+{
+  "answer": "In Tableau, when calculating gross margin percentage (GM%), we use SUM() around both the numerator and denominator to ensure proper aggregation at the visualization level. Without SUM(), Tableau would calculate row-level percentages before aggregating, leading to incorrect results.\n\nCitations:\n- [Section: Calculations, Lecture: Adding a custom calculation]",
+  "confidence": 0.85,
+  "citations": [
+    "[Section: Calculations, Lecture: Adding a custom calculation]"
+  ],
+  "latency_ms": 1234.56,
+  "retrieval_accuracy": 1.0,
+  "hallucination_flag": false
+}
+```
+
+### POST /qa/stream
+
+Streaming question-answering endpoint using Server-Sent Events (SSE).
+
+**Request Example**:
+
+```bash
+curl -X POST http://localhost:8001/qa/stream \
+  -H "Content-Type: application/json" \
+  -d '{
+    "question_lecture": "Visual Analytics",
+    "question_title": "Chart Selection",
+    "question_body": "When should I use bar charts vs line charts?"
+  }'
+```
+
+**Response Format** (Server-Sent Events):
+
+```text
+data: {"token": "Bar"}
+
+data: {"token": " charts"}
+
+data: {"token": " are"}
+
+data: {"token": " best"}
+
+data: {"done": true, "confidence": 0.8, "citations": ["[Section: Visual Analytics, Lecture: Building charts]"], "latency_ms": 2345.67, "retrieval_accuracy": 1.0, "hallucination_flag": false}
+```
+
+### GET /health
+
+**Response Schema**:
+
+```python
+class HealthResponse(BaseModel):
+    ready: bool
+```
+
+```bash
+curl http://localhost:8001/health
+```
+
+### GET /monitoring
+
+Returns aggregated QA performance metrics.
+
+**Response Schema**:
+
+```python
+class MonitoringResponse(BaseModel):
+    requests_total: int
+    avg_latency_ms: float
+    avg_retrieval_accuracy: float
+    hallucination_rate: float
+```
+
+**Example**:
+
+```bash
+curl http://localhost:8001/monitoring
+```
+
+```json
+{
+  "requests_total": 127,
+  "avg_latency_ms": 1523.45,
+  "avg_retrieval_accuracy": 0.9449,
+  "hallucination_rate": 0.0315
+}
+```
+
+## Configuration
+
+Environment variables:
+
+- `OPENAI_API_KEY`: **Required**. OpenAI API key for embeddings and chat
+- `OPENAI_CHAT_MODEL`: Chat model name (default: `gpt-4o-mini`)
+- `OPENAI_EMBEDDING_MODEL`: Embedding model (default: `text-embedding-3-small`)
+- `QA_TRANSCRIPT_PDF`: Path to course transcript PDF (default: `tableau_course_transcript.pdf`)
+- `QA_CHROMA_COLLECTION`: ChromaDB collection name (default: `tableau_qa_collection`)
+
+## Document Processing
+
+Transcript processing pipeline (src/qa_api.py:163-184):
+
+1. Load PDF using `PyPDFLoader`
+2. Split by Markdown headers:
+   - `#` → section
+   - `##` → lecture
+   - `###` → topic
+3. Token-based chunking:
+   - Chunk size: 350 tokens
+   - Overlap: 50 tokens
+4. Embed chunks with OpenAI embeddings
+5. Store in ChromaDB
+
+If PDF is missing, the service uses a fallback sample transcript.
+
+## Prompt Engineering
+
+System prompt (src/qa_api.py:78-88):
+
+```python
+PROMPT_RETRIEVING_S = """You are a helpful teaching assistant for a Tableau course.
+You will receive a student question and supporting context passages.
+
+Rules:
+1) Answer ONLY using the supplied context.
+2) If context is insufficient, say exactly: "I don't have enough context to answer confidently."
+3) Add a short "Citations" section at the end.
+4) Each citation must use this format:
+   - [Section: <section>, Lecture: <lecture>]
+5) Do not invent citations.
+"""
+```
+
+## Citation Validation
+
+The service extracts citations using regex pattern matching (src/qa_api.py:104-106):
+
+```python
+pattern = r"\[Section:\s*.*?,\s*Lecture:\s*.*?\]"
+```
+
+Citations are validated against retrieved documents to compute `retrieval_accuracy`:
+
+- **1.0**: All citations match retrieved documents
+- **< 1.0**: Some citations are hallucinated (triggers `hallucination_flag`)
+
+## Confidence Scoring
+
+Confidence is computed using a weighted formula (src/qa_api.py:126-131):
+
+```python
+coverage = min(len(retrieved_docs) / 4.0, 1.0)
+nonempty = 1.0 if len(answer_text.strip()) > 20 else 0.0
+confidence = 0.4 * coverage + 0.4 * retrieval_accuracy + 0.2 * nonempty
+```
+
+Factors:
+- **40%**: Coverage (number of retrieved documents)
+- **40%**: Retrieval accuracy (citation validity)
+- **20%**: Non-empty answer check
+
+## Fallback Behavior
+
+If `OPENAI_API_KEY` is not set or retrieval fails:
+
+```json
+{
+  "answer": "I don't have enough context to answer confidently.",
+  "confidence": 0.0,
+  "citations": [],
+  "latency_ms": 12.34,
+  "retrieval_accuracy": 0.0,
+  "hallucination_flag": false
+}
+```
+
+## Starting the Service
+
+Start the QA API:
+
+```bash
+export OPENAI_API_KEY=sk-...
+uvicorn src.qa_api:app --host 0.0.0.0 --port 8001
+```
+
+With auto-reload:
+
+```bash
+uvicorn src.qa_api:app --reload --host 0.0.0.0 --port 8001
+```
+
+## Monitoring Metrics
+
+The service tracks in-memory metrics for all requests:
+
+- `requests_total`: Total QA requests processed
+- `latency_ms_total`: Cumulative latency (sum)
+- `retrieval_accuracy_total`: Cumulative retrieval accuracy (sum)
+- `hallucination_count`: Number of requests with invalid citations
+
+Metrics are updated after each request (src/qa_api.py:134-139).
+
+## Error Handling
+
+- **503 Service Unavailable**: LLM not configured (missing API key)
+- **422 Unprocessable Entity**: Invalid request fields
+- **500 Internal Server Error**: Unexpected errors during retrieval or generation
+
+## Related
+
+- [Prediction API](/runtime/prediction-api) - Student purchase prediction service
+- [Monitoring](/runtime/monitoring) - Drift detection and system health

@@ -1,0 +1,323 @@
+---
+title: AI Systems Engineering Portfolio
+description: Production-grade machine learning systems from training to deployment
+mode: custom
+---
+
+<div className="relative overflow-hidden bg-gradient-to-br from-[#1E40AF] via-[#2563EB] to-[#3B82F6] dark:from-[#0f1117] dark:via-[#1a1d27] dark:to-[#242838] py-20">
+  <div className="max-w-7xl mx-auto px-6 lg:px-8">
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+      <div className="lg:col-span-7">
+        <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold text-white mb-6">
+          AI Systems Engineering Portfolio
+        </h1>
+        <p className="text-lg sm:text-xl text-white/90 max-w-2xl mb-8">
+          End-to-end machine learning systems workflow covering data processing, model training, optimization, deployment, and monitoring with production-grade best practices.
+        </p>
+        <div className="flex flex-wrap gap-4">
+          <a 
+            href="/quickstart" 
+            className="inline-flex items-center px-6 py-3 rounded-lg bg-white text-[#2563EB] font-semibold hover:bg-gray-100 transition-colors no-underline"
+          >
+            Get Started
+            <svg className="ml-2 w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </a>
+          <a 
+            href="/architecture" 
+            className="inline-flex items-center px-6 py-3 rounded-lg border-2 border-white/30 bg-white/10 text-white font-semibold hover:bg-white/20 transition-colors no-underline"
+          >
+            View Architecture
+          </a>
+        </div>
+      </div>
+      <div className="lg:col-span-5 hidden lg:block">
+        <div className="relative">
+          <div className="absolute inset-0 bg-gradient-to-r from-[#2563EB] to-[#3B82F6] opacity-20 blur-3xl rounded-full"></div>
+          <div className="relative bg-white/10 backdrop-blur-sm border border-white/20 rounded-2xl p-8">
+            <div className="space-y-3 font-mono text-sm text-white/90">
+              <div className="flex items-center gap-2">
+                <span className="text-green-400">✓</span>
+                <span>Reproducible training pipeline</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-green-400">✓</span>
+                <span>ONNX export & quantization</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-green-400">✓</span>
+                <span>Hardware-aware optimization</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-green-400">✓</span>
+                <span>Production FastAPI endpoints</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-green-400">✓</span>
+                <span>Real-time drift monitoring</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <div className="text-center mb-12">
+    <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">
+      Quick start
+    </h2>
+    <p className="text-base text-gray-600 dark:text-gray-400 max-w-2xl mx-auto">
+      Get up and running with the ML systems workflow in minutes
+    </p>
+  </div>
+
+  <Steps>
+    <Step title="Install dependencies">
+      Clone the repository and install required packages:
+      
+      ```bash
+      git clone https://github.com/RaviTejaMedarametla/Data-Science-AI-Portfolio.git
+      cd Data-Science-AI-Portfolio
+      pip install -r requirements.txt
+      ```
+    </Step>
+    
+    <Step title="Run the training pipeline">
+      Execute the configuration-driven training workflow:
+      
+      ```bash
+      python -m src.train
+      ```
+      
+      This will:
+      - Load and preprocess data from `ml_datasource.csv`
+      - Engineer features using the configuration in `config.yaml`
+      - Train multiple models with cross-validation
+      - Select the best model and save it to `artifacts/`
+      - Generate metrics, lineage, and drift baseline files
+    </Step>
+    
+    <Step title="Start the prediction API">
+      Launch the FastAPI server for real-time predictions:
+      
+      ```bash
+      uvicorn src.api:app --host 0.0.0.0 --port 8000
+      ```
+      
+      Access the interactive API documentation at `http://localhost:8000/docs`
+    </Step>
+    
+    <Step title="Make your first prediction">
+      Send a prediction request to the API:
+      
+      ```bash
+      curl -X POST "http://localhost:8000/predict" \
+        -H "Content-Type: application/json" \
+        -d '{
+          "student_country": "United States",
+          "days_on_platform": 45,
+          "minutes_watched": 320.5,
+          "courses_started": 3,
+          "practice_exams_started": 2,
+          "practice_exams_passed": 1,
+          "minutes_spent_on_exams": 85.0
+        }'
+      ```
+      
+      <Accordion title="Example response">
+      ```json
+      {
+        "predicted_purchase_probability": 0.82,
+        "predicted_purchase": 1
+      }
+      ```
+      </Accordion>
+    </Step>
+  </Steps>
+</div>
+
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <div className="text-center mb-12">
+    <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">
+      Explore the system
+    </h2>
+    <p className="text-base text-gray-600 dark:text-gray-400 max-w-2xl mx-auto">
+      Navigate through the complete ML lifecycle
+    </p>
+  </div>
+
+  <CardGroup cols={3}>
+    <Card title="Training" icon="brain" href="/training/data-loading">
+      Learn how to train models with reproducible pipelines, feature engineering, and cross-validation
+    </Card>
+    <Card title="Deployment" icon="rocket" href="/deployment/overview">
+      Export models to ONNX, apply quantization, and validate numerical parity
+    </Card>
+    <Card title="Optimization" icon="gauge-high" href="/optimization/benchmarking">
+      Benchmark performance, analyze hardware trade-offs, and tune for production
+    </Card>
+    <Card title="Runtime" icon="server" href="/runtime/prediction-api">
+      Deploy FastAPI endpoints for predictions, QA, and streaming inference
+    </Card>
+    <Card title="API Reference" icon="code" href="/api-reference/health">
+      Explore the complete API surface with request/response schemas
+    </Card>
+    <Card title="Case Studies" icon="book-open" href="/case-studies/overview">
+      Real-world applications in healthcare, edge AI, and streaming analytics
+    </Card>
+  </CardGroup>
+</div>
+
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <div className="text-center mb-12">
+    <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">
+      Key features
+    </h2>
+    <p className="text-base text-gray-600 dark:text-gray-400 max-w-2xl mx-auto">
+      Production-grade capabilities for enterprise ML systems
+    </p>
+  </div>
+
+  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <div className="p-6 rounded-2xl border border-gray-200 dark:border-[#27272a] bg-gray-50 dark:bg-[#1a1d27] hover:border-[#2563EB] dark:hover:border-[#2563EB] transition-colors">
+      <div className="flex items-start gap-4">
+        <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-[#2563EB]/10 dark:bg-[#2563EB]/20 flex items-center justify-center">
+          <svg className="w-5 h-5 text-[#2563EB]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </div>
+        <div>
+          <h3 className="text-base font-semibold text-gray-900 dark:text-white mb-2">
+            Configuration-Driven Training
+          </h3>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Reproducible model training with YAML configuration, deterministic seeds, and lineage tracking
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div className="p-6 rounded-2xl border border-gray-200 dark:border-[#27272a] bg-gray-50 dark:bg-[#1a1d27] hover:border-[#2563EB] dark:hover:border-[#2563EB] transition-colors">
+      <div className="flex items-start gap-4">
+        <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-[#2563EB]/10 dark:bg-[#2563EB]/20 flex items-center justify-center">
+          <svg className="w-5 h-5 text-[#2563EB]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+        </div>
+        <div>
+          <h3 className="text-base font-semibold text-gray-900 dark:text-white mb-2">
+            ONNX Export & Quantization
+          </h3>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Convert scikit-learn models to ONNX with INT8 quantization for optimized CPU inference
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div className="p-6 rounded-2xl border border-gray-200 dark:border-[#27272a] bg-gray-50 dark:bg-[#1a1d27] hover:border-[#2563EB] dark:hover:border-[#2563EB] transition-colors">
+      <div className="flex items-start gap-4">
+        <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-[#2563EB]/10 dark:bg-[#2563EB]/20 flex items-center justify-center">
+          <svg className="w-5 h-5 text-[#2563EB]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+          </svg>
+        </div>
+        <div>
+          <h3 className="text-base font-semibold text-gray-900 dark:text-white mb-2">
+            Statistical Benchmarking
+          </h3>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Measure latency, throughput, and accuracy with bootstrap confidence intervals and significance testing
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div className="p-6 rounded-2xl border border-gray-200 dark:border-[#27272a] bg-gray-50 dark:bg-[#1a1d27] hover:border-[#2563EB] dark:hover:border-[#2563EB] transition-colors">
+      <div className="flex items-start gap-4">
+        <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-[#2563EB]/10 dark:bg-[#2563EB]/20 flex items-center justify-center">
+          <svg className="w-5 h-5 text-[#2563EB]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+          </svg>
+        </div>
+        <div>
+          <h3 className="text-base font-semibold text-gray-900 dark:text-white mb-2">
+            Drift Detection & Monitoring
+          </h3>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Track feature drift and prediction rate shifts with automatic retraining triggers
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div className="p-6 rounded-2xl border border-gray-200 dark:border-[#27272a] bg-gray-50 dark:bg-[#1a1d27] hover:border-[#2563EB] dark:hover:border-[#2563EB] transition-colors">
+      <div className="flex items-start gap-4">
+        <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-[#2563EB]/10 dark:bg-[#2563EB]/20 flex items-center justify-center">
+          <svg className="w-5 h-5 text-[#2563EB]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
+          </svg>
+        </div>
+        <div>
+          <h3 className="text-base font-semibold text-gray-900 dark:text-white mb-2">
+            Production API Endpoints
+          </h3>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            FastAPI services for predictions, batch inference, QA, and streaming with health checks
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div className="p-6 rounded-2xl border border-gray-200 dark:border-[#27272a] bg-gray-50 dark:bg-[#1a1d27] hover:border-[#2563EB] dark:hover:border-[#2563EB] transition-colors">
+      <div className="flex items-start gap-4">
+        <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-[#2563EB]/10 dark:bg-[#2563EB]/20 flex items-center justify-center">
+          <svg className="w-5 h-5 text-[#2563EB]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </div>
+        <div>
+          <h3 className="text-base font-semibold text-gray-900 dark:text-white mb-2">
+            RAG-Based QA System
+          </h3>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Question answering API powered by LangChain, ChromaDB, and OpenAI with streaming support
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+  <div className="rounded-2xl border border-gray-200 dark:border-[#27272a] bg-gradient-to-br from-gray-50 to-white dark:from-[#1a1d27] dark:to-[#242838] p-12 text-center">
+    <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">
+      Ready to explore the system?
+    </h2>
+    <p className="text-base text-gray-600 dark:text-gray-400 max-w-2xl mx-auto mb-8">
+      Dive into the complete ML lifecycle workflow with hands-on guides and real-world examples
+    </p>
+    <div className="flex flex-wrap justify-center gap-4">
+      <a 
+        href="/quickstart" 
+        className="inline-flex items-center px-6 py-3 rounded-lg bg-[#2563EB] text-white font-semibold hover:bg-[#1E40AF] transition-colors no-underline"
+      >
+        View Quickstart Guide
+        <svg className="ml-2 w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+        </svg>
+      </a>
+      <a 
+        href="/api-reference/health" 
+        className="inline-flex items-center px-6 py-3 rounded-lg border-2 border-gray-300 dark:border-[#27272a] bg-white dark:bg-[#1a1d27] text-gray-900 dark:text-white font-semibold hover:border-[#2563EB] dark:hover:border-[#2563EB] transition-colors no-underline"
+      >
+        Explore API Reference
+      </a>
+    </div>
+  </div>
+</div>

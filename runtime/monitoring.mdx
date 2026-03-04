@@ -1,0 +1,477 @@
+---
+title: Monitoring & Drift Detection
+description: Runtime drift detection with automated retraining triggers
+---
+
+## Overview
+
+The monitoring system tracks prediction patterns in real-time to detect feature distribution drift and prediction rate shifts. When drift exceeds configured thresholds, the system recommends retraining the model.
+
+## Architecture
+
+- **In-Memory Tracking**: Cumulative feature sums and prediction counts
+- **Thread-Safe**: Lock-protected updates during concurrent requests
+- **Baseline Comparison**: Z-score computation against training distribution
+- **Dual Triggers**: Feature drift and prediction rate shift detection
+
+## Drift Detection Endpoint
+
+### GET /monitoring/drift
+
+Returns current drift status and retraining recommendation.
+
+**Response Schema**:
+
+```python
+class DriftStatusResponse(BaseModel):
+    samples_observed: int
+    drift_score_max_abs_z: float
+    drifted_features: List[str]
+    predicted_positive_rate: float
+    training_positive_rate: float
+    should_retrain: bool
+    reason: str
+    recommended_action: str
+```
+
+**Example Request**:
+
+```bash
+curl http://localhost:8000/monitoring/drift
+```
+
+**Example Response** (No Drift):
+
+```json
+{
+  "samples_observed": 245,
+  "drift_score_max_abs_z": 2.34,
+  "drifted_features": [],
+  "predicted_positive_rate": 0.328,
+  "training_positive_rate": 0.315,
+  "should_retrain": false,
+  "reason": "below_threshold",
+  "recommended_action": "continue_monitoring"
+}
+```
+
+**Example Response** (Feature Drift Detected):
+
+```json
+{
+  "samples_observed": 512,
+  "drift_score_max_abs_z": 4.76,
+  "drifted_features": ["days_on_platform", "minutes_watched"],
+  "predicted_positive_rate": 0.342,
+  "training_positive_rate": 0.315,
+  "should_retrain": true,
+  "reason": "feature_distribution_drift",
+  "recommended_action": "trigger_retraining_pipeline"
+}
+```
+
+**Example Response** (Prediction Rate Shift):
+
+```json
+{
+  "samples_observed": 423,
+  "drift_score_max_abs_z": 2.89,
+  "drifted_features": ["courses_started"],
+  "predicted_positive_rate": 0.455,
+  "training_positive_rate": 0.315,
+  "should_retrain": true,
+  "reason": "prediction_rate_shift",
+  "recommended_action": "trigger_retraining_pipeline"
+}
+```
+
+## Drift Detection Logic
+
+Implemented in `_compute_drift_status()` (src/api.py:91-172).
+
+### Step 1: Load Baseline
+
+Drift baseline loaded from `artifacts/drift_baseline.json`:
+
+```json
+{
+  "training_positive_rate": 0.315,
+  "numeric_feature_stats": {
+    "days_on_platform": {
+      "mean": 42.5,
+      "std": 18.3
+    },
+    "minutes_watched": {
+      "mean": 1245.7,
+      "std": 523.8
+    },
+    "courses_started": {
+      "mean": 2.8,
+      "std": 1.4
+    }
+  }
+}
+```
+
+Generated during training by `python -m src.train`.
+
+### Step 2: Compute Current Statistics
+
+For each prediction, the API updates in-memory tracking (src/api.py:256-260):
+
+```python
+with _LOCK:
+    for col in numeric_cols:
+        _MONITORING["feature_sums"][col] += float(feat_df[col].sum())
+    _MONITORING["samples"] += len(feat_df)
+    _MONITORING["predicted_positive"] += int(preds.sum())
+```
+
+Current mean computed as:
+
+```python
+current_mean = feature_sums[feature] / samples
+```
+
+### Step 3: Calculate Z-Scores
+
+For each feature, compute absolute Z-score (src/api.py:130-141):
+
+```python
+for feature, s in feature_sums.items():
+    current_mean = float(s) / samples
+    base_mean = float(baseline_stats[feature]["mean"])
+    base_std = max(float(baseline_stats[feature]["std"]), 1e-6)
+    abs_z = abs((current_mean - base_mean) / base_std)
+    max_abs_z = max(max_abs_z, abs_z)
+    if abs_z >= z_threshold:
+        drifted_features.append(feature)
+```
+
+Features with `abs_z >= z_threshold` are flagged as drifted.
+
+### Step 4: Compute Prediction Rate Shift
+
+```python
+predicted_positive_rate = predicted_positive / samples
+class_shift = abs(predicted_positive_rate - training_positive_rate)
+```
+
+### Step 5: Determine Retraining Need
+
+Retraining triggered if (src/api.py:146-161):
+
+1. **Insufficient samples**: Wait for `drift_min_samples`
+2. **Feature drift**: `len(drifted_features) >= drift_min_features`
+3. **Prediction rate shift**: `class_shift >= class_rate_shift_threshold`
+
+```python
+if samples < min_samples:
+    reason = "insufficient_samples"
+    recommended_action = "collect_more_samples"
+else:
+    if len(drifted_features) >= min_drifted_features:
+        should_retrain = True
+        reason = "feature_distribution_drift"
+        recommended_action = "trigger_retraining_pipeline"
+    elif class_shift >= class_rate_shift:
+        should_retrain = True
+        reason = "prediction_rate_shift"
+        recommended_action = "trigger_retraining_pipeline"
+```
+
+## Configuration
+
+Monitoring parameters in `config.yaml`:
+
+```yaml
+monitoring:
+  drift_min_samples: 100
+  drift_zscore_threshold: 3.0
+  drift_min_features: 2
+  class_rate_shift_threshold: 0.10
+  prediction_log_file: artifacts/prediction_log.jsonl
+```
+
+### Parameters
+
+- `drift_min_samples` (default: 100): Minimum predictions before drift detection
+- `drift_zscore_threshold` (default: 3.0): Z-score threshold for feature drift
+- `drift_min_features` (default: 2): Minimum drifted features to trigger retraining
+- `class_rate_shift_threshold` (default: 0.10): Absolute prediction rate change threshold
+- `prediction_log_file`: Path to JSON Lines prediction log
+
+## Drift Baseline Structure
+
+`artifacts/drift_baseline.json` contains:
+
+```json
+{
+  "training_positive_rate": 0.315,
+  "numeric_feature_stats": {
+    "days_on_platform": {
+      "mean": 42.5,
+      "std": 18.3,
+      "min": 0.0,
+      "max": 365.0
+    },
+    "minutes_watched": {
+      "mean": 1245.7,
+      "std": 523.8,
+      "min": 0.0,
+      "max": 15000.0
+    },
+    "courses_started": {
+      "mean": 2.8,
+      "std": 1.4,
+      "min": 0,
+      "max": 20
+    },
+    "practice_exams_started": {
+      "mean": 3.2,
+      "std": 2.1,
+      "min": 0,
+      "max": 15
+    },
+    "practice_exams_passed": {
+      "mean": 2.1,
+      "std": 1.8,
+      "min": 0,
+      "max": 15
+    },
+    "minutes_spent_on_exams": {
+      "mean": 145.6,
+      "std": 89.3,
+      "min": 0.0,
+      "max": 800.0
+    }
+  }
+}
+```
+
+**Generated by**: Training pipeline (`python -m src.train`)
+
+**Statistics Computed**: Mean, std, min, max for all numeric features in training set
+
+## Monitoring States
+
+### Baseline Not Loaded
+
+```json
+{
+  "samples_observed": 0,
+  "drift_score_max_abs_z": 0.0,
+  "drifted_features": [],
+  "predicted_positive_rate": 0.0,
+  "training_positive_rate": 0.0,
+  "should_retrain": false,
+  "reason": "baseline_not_loaded",
+  "recommended_action": "run_training_to_generate_baseline"
+}
+```
+
+**Cause**: `drift_baseline.json` missing or failed to load
+
+**Action**: Run training to generate baseline
+
+### No Predictions Observed
+
+```json
+{
+  "samples_observed": 0,
+  "drift_score_max_abs_z": 0.0,
+  "drifted_features": [],
+  "predicted_positive_rate": 0.0,
+  "training_positive_rate": 0.315,
+  "should_retrain": false,
+  "reason": "no_predictions_observed",
+  "recommended_action": "collect_inference_samples"
+}
+```
+
+**Cause**: No predictions made since API startup
+
+**Action**: Send prediction requests to `/predict` or `/batch_predict`
+
+### Insufficient Samples
+
+```json
+{
+  "samples_observed": 45,
+  "drift_score_max_abs_z": 1.23,
+  "drifted_features": [],
+  "predicted_positive_rate": 0.356,
+  "training_positive_rate": 0.315,
+  "should_retrain": false,
+  "reason": "insufficient_samples",
+  "recommended_action": "collect_more_samples"
+}
+```
+
+**Cause**: `samples_observed < drift_min_samples`
+
+**Action**: Continue sending predictions until minimum threshold reached
+
+### Below Threshold
+
+```json
+{
+  "samples_observed": 245,
+  "drift_score_max_abs_z": 2.34,
+  "drifted_features": [],
+  "predicted_positive_rate": 0.328,
+  "training_positive_rate": 0.315,
+  "should_retrain": false,
+  "reason": "below_threshold",
+  "recommended_action": "continue_monitoring"
+}
+```
+
+**Cause**: No significant drift detected
+
+**Action**: Continue monitoring
+
+### Feature Distribution Drift
+
+```json
+{
+  "samples_observed": 512,
+  "drift_score_max_abs_z": 4.76,
+  "drifted_features": ["days_on_platform", "minutes_watched"],
+  "predicted_positive_rate": 0.342,
+  "training_positive_rate": 0.315,
+  "should_retrain": true,
+  "reason": "feature_distribution_drift",
+  "recommended_action": "trigger_retraining_pipeline"
+}
+```
+
+**Cause**: `len(drifted_features) >= drift_min_features`
+
+**Action**: Trigger retraining pipeline
+
+### Prediction Rate Shift
+
+```json
+{
+  "samples_observed": 423,
+  "drift_score_max_abs_z": 2.89,
+  "drifted_features": ["courses_started"],
+  "predicted_positive_rate": 0.455,
+  "training_positive_rate": 0.315,
+  "should_retrain": true,
+  "reason": "prediction_rate_shift",
+  "recommended_action": "trigger_retraining_pipeline"
+}
+```
+
+**Cause**: `abs(predicted_positive_rate - training_positive_rate) >= class_rate_shift_threshold`
+
+**Action**: Trigger retraining pipeline
+
+## Prediction Logging
+
+All predictions logged to `artifacts/prediction_log.jsonl` (src/api.py:175-192):
+
+```jsonl
+{"timestamp_utc": "2026-03-04T10:15:30.123456+00:00", "threshold": 0.482, "predicted_purchase_probability": 0.7234, "predicted_purchase": 1, "features": {"student_country": "US", "days_on_platform": 45, "minutes_watched": 1200.5, "courses_started": 3, "practice_exams_started": 5, "practice_exams_passed": 4, "minutes_spent_on_exams": 180.0}}
+{"timestamp_utc": "2026-03-04T10:16:12.789012+00:00", "threshold": 0.482, "predicted_purchase_probability": 0.4512, "predicted_purchase": 0, "features": {"student_country": "CA", "days_on_platform": 30, "minutes_watched": 800.0, "courses_started": 2, "practice_exams_started": 3, "practice_exams_passed": 2, "minutes_spent_on_exams": 120.0}}
+```
+
+Log entries include:
+- `timestamp_utc`: ISO 8601 timestamp with timezone
+- `threshold`: Model decision threshold
+- `predicted_purchase_probability`: Raw probability score
+- `predicted_purchase`: Binary prediction (0 or 1)
+- `features`: Raw input features
+
+Useful for:
+- Offline drift analysis
+- Model debugging
+- Audit trails
+- Retraining data collection
+
+## Retraining Workflow
+
+1. **Monitor drift**: Poll `/monitoring/drift` periodically
+2. **Detect trigger**: `should_retrain: true`
+3. **Collect samples**: Read `prediction_log.jsonl` for recent predictions
+4. **Retrain model**: Run training pipeline with updated data
+5. **Generate baseline**: New `drift_baseline.json` created
+6. **Reload API**: Restart service or implement hot-reload
+7. **Reset monitoring**: In-memory stats cleared on restart
+
+## Alerting Integration
+
+Integrate drift endpoint with monitoring systems:
+
+```bash
+#!/bin/bash
+# Poll drift endpoint and alert if retraining needed
+
+RESPONSE=$(curl -s http://localhost:8000/monitoring/drift)
+SHOULD_RETRAIN=$(echo $RESPONSE | jq -r '.should_retrain')
+
+if [ "$SHOULD_RETRAIN" = "true" ]; then
+  REASON=$(echo $RESPONSE | jq -r '.reason')
+  FEATURES=$(echo $RESPONSE | jq -r '.drifted_features | join(", ")')
+  
+  echo "ALERT: Drift detected - $REASON"
+  echo "Drifted features: $FEATURES"
+  
+  # Trigger retraining pipeline
+  python -m src.train
+  
+  # Restart API
+  systemctl restart prediction-api
+fi
+```
+
+Run via cron:
+
+```cron
+*/30 * * * * /opt/scripts/check_drift.sh
+```
+
+## Thread Safety
+
+Monitoring state protected by thread lock (src/api.py:79):
+
+```python
+_LOCK = Lock()
+
+# Update during prediction
+with _LOCK:
+    _MONITORING["samples"] += len(feat_df)
+    _MONITORING["predicted_positive"] += int(preds.sum())
+
+# Read during drift check
+with _LOCK:
+    samples = int(_MONITORING["samples"])
+    feature_sums = dict(_MONITORING["feature_sums"])
+    predicted_positive = int(_MONITORING["predicted_positive"])
+```
+
+Safe for concurrent requests.
+
+## Limitations
+
+- **In-memory state**: Monitoring resets on API restart (not persistent)
+- **Global baseline**: Single baseline for all models (no A/B test support)
+- **Cumulative tracking**: No sliding window or time-based decay
+- **Simple Z-score**: Assumes Gaussian distributions
+- **No covariate shift detection**: Only marginal feature distributions tracked
+
+## Best Practices
+
+1. **Set appropriate thresholds**: Tune `drift_zscore_threshold` based on false positive rate
+2. **Monitor continuously**: Poll `/monitoring/drift` every 15-30 minutes
+3. **Review drifted features**: Investigate why specific features drift
+4. **Collect ground truth**: Track actual purchase outcomes for retraining labels
+5. **Version baselines**: Store `drift_baseline.json` with model artifacts
+6. **Test retraining**: Validate new models before production deployment
+
+## Related
+
+- [Prediction API](/runtime/prediction-api) - Prediction endpoints and artifact loading
+- [Streaming Pipelines](/runtime/streaming-pipelines) - Real-time inference orchestration

@@ -1,0 +1,309 @@
+---
+title: 'INT8 Quantization'
+description: 'Optimize ONNX models with dynamic INT8 quantization for reduced memory and latency'
+---
+
+## Overview
+
+The `quantize_onnx.py` script applies **dynamic INT8 quantization** to ONNX models, reducing model size and inference latency for CPU and edge deployment.
+
+## Prerequisites
+
+<Steps>
+  <Step title="Export ONNX model">
+    Ensure `artifacts/model.onnx` exists:
+    
+    ```bash
+    python deployment/export_onnx.py
+    ```
+  </Step>
+</Steps>
+
+## Usage
+
+```bash
+python deployment/quantize_onnx.py
+```
+
+<Info>
+No command-line arguments required. Reads from `artifacts/model.onnx` and writes to `artifacts/model.int8.onnx`.
+</Info>
+
+## How It Works
+
+The script applies ONNX Runtime's dynamic quantization with INT8 weight compression:
+
+```python deployment/quantize_onnx.py
+from onnxruntime.quantization import QuantType, quantize_dynamic
+
+source = Path("artifacts/model.onnx")
+target = Path("artifacts/model.int8.onnx")
+
+quantize_dynamic(
+    model_input=str(source),
+    model_output=str(target),
+    weight_type=QuantType.QInt8,
+)
+```
+
+### Quantization Strategy
+
+<Tabs>
+  <Tab title="Dynamic Quantization">
+    **Weights:** Quantized to INT8 at model load time
+    
+    **Activations:** Remain FP32, dynamically quantized per-batch during inference
+    
+    **Best for:**
+    - CPU inference
+    - Variable input distributions
+    - Models where compute is weight-bound (linear layers, embeddings)
+  </Tab>
+  
+  <Tab title="Static Quantization (Not Used)">
+    **Weights + Activations:** Pre-quantized using calibration data
+    
+    **Best for:**
+    - Mobile/edge devices with INT8 accelerators
+    - Fixed input distributions
+    - Maximum performance at cost of calibration complexity
+    
+    <Warning>
+    This script uses **dynamic** quantization only. Static quantization requires calibration dataset.
+    </Warning>
+  </Tab>
+</Tabs>
+
+## Performance Benefits
+
+<CardGroup cols={3}>
+  <Card title="Model Size" icon="hard-drive">
+    **2-4x smaller**
+    
+    INT8 weights are 4x smaller than FP32. Typical reduction:
+    - 10 MB model → 3-4 MB
+    - Faster model loading
+    - Lower disk/network overhead
+  </Card>
+  
+  <Card title="Inference Latency" icon="clock">
+    **1.5-2x faster**
+    
+    INT8 GEMM operations reduce compute:
+    - Linear layers: ~2x speedup
+    - Tree ensembles: ~1.2x speedup
+    - Overall: 30-50% latency reduction
+  </Card>
+  
+  <Card title="Memory Usage" icon="memory">
+    **2-3x lower**
+    
+    Reduced weight memory:
+    - Lower RAM footprint
+    - Better CPU cache utilization
+    - Enables larger batch sizes
+  </Card>
+</CardGroup>
+
+<Note>
+Actual speedup depends on model architecture. Linear/fully-connected layers benefit most; tree-based models see smaller gains.
+</Note>
+
+## Expected Output
+
+```bash
+$ python deployment/quantize_onnx.py
+Wrote artifacts/model.int8.onnx
+```
+
+```bash
+$ ls -lh artifacts/model*.onnx
+-rw-r--r-- 1 user user 12M model.onnx
+-rw-r--r-- 1 user user  4M model.int8.onnx
+```
+
+## Implementation Details
+
+### Quantization Algorithm
+
+1. **Weight Analysis:** Identify quantizable operators (MatMul, Gemm, Conv)
+2. **Scale Computation:** Calculate per-tensor scale factors: `scale = max(abs(weights)) / 127`
+3. **Quantization:** Convert FP32 weights to INT8: `w_int8 = round(w_fp32 / scale)`
+4. **Graph Rewrite:** Insert QuantizeLinear/DequantizeLinear nodes around operators
+5. **Optimization:** Fuse dequant-op-quant sequences where possible
+
+### QuantType Options
+
+```python
+QuantType.QInt8    # Signed 8-bit integer (used by this script)
+QuantType.QUInt8   # Unsigned 8-bit integer
+```
+
+<Info>
+**QInt8** is preferred for CPU inference as most SIMD instructions expect signed integers.
+</Info>
+
+## Trade-offs and Limitations
+
+<Warning>
+**Accuracy Impact:** INT8 quantization introduces numerical precision loss. Predictions near the decision threshold may shift.
+</Warning>
+
+### When Quantization Works Well
+
+<Check>Model has large fully-connected or embedding layers</Check>
+<Check>Predictions are robust to small numerical perturbations</Check>
+<Check>Threshold is well-separated from boundary cases</Check>
+<Check>Feature distributions are stable and normalized</Check>
+
+### When to Avoid Quantization
+
+<Warning>Model relies on precise floating-point values (e.g., probability calibration)</Warning>
+<Warning>Threshold is very close to 0.5 (high sensitivity to rounding errors)</Warning>
+<Warning>Tree ensemble with shallow trees (quantization overhead > benefit)</Warning>
+<Warning>Model already achieves target latency without quantization</Warning>
+
+## Validation Workflow
+
+After quantization, **always validate** prediction parity:
+
+```bash
+python deployment/parity_check.py --abs-tol 0.04 --mean-tol 0.01
+```
+
+<Steps>
+  <Step title="Run parity check">
+    Compare quantized model against original sklearn model:
+    
+    ```bash
+    python deployment/parity_check.py
+    ```
+  </Step>
+  
+  <Step title="Inspect parity report">
+    Check `artifacts/parity_report.json` for max/mean absolute differences:
+    
+    ```json
+    {
+      "max_abs_diff": 0.0234,
+      "mean_abs_diff": 0.0067,
+      "passed": true
+    }
+    ```
+  </Step>
+  
+  <Step title="Tune tolerances if needed">
+    If parity fails, widen tolerances or investigate outliers:
+    
+    ```bash
+    python deployment/parity_check.py --abs-tol 0.06 --mean-tol 0.02
+    ```
+  </Step>
+</Steps>
+
+## Benchmark Performance
+
+Compare quantized vs. non-quantized inference:
+
+```bash
+# Baseline ONNX (FP32)
+python deployment/cpu_inference.py --backend onnx
+
+# Quantized ONNX (INT8) - modify script to load model.int8.onnx
+python deployment/cpu_inference.py --backend onnx
+```
+
+<Tip>
+To benchmark the quantized model, temporarily modify `cpu_inference.py` line 65 to load `model.int8.onnx` instead of `model.onnx`.
+</Tip>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Error: Missing artifacts/model.onnx. Run export first.">
+    **Cause:** ONNX model not exported yet.
+    
+    **Solution:**
+    ```bash
+    python deployment/export_onnx.py
+    ```
+  </Accordion>
+  
+  <Accordion title="Quantized model is same size as original">
+    **Cause:** Model has no quantizable operators (e.g., pure tree ensemble).
+    
+    **Solution:** Tree models don't benefit from weight quantization. Skip quantization step.
+  </Accordion>
+  
+  <Accordion title="Parity check fails after quantization">
+    **Cause:** INT8 precision loss exceeds tolerance.
+    
+    **Solution:**
+    1. Widen tolerances: `--abs-tol 0.06 --mean-tol 0.02`
+    2. Inspect feature distributions for outliers
+    3. Check if model uses probability calibration (sensitive to rounding)
+    4. Consider skipping quantization if accuracy is critical
+  </Accordion>
+  
+  <Accordion title="Quantized model is slower than original">
+    **Cause:** Overhead from dequantization dominates savings (small model or tree ensemble).
+    
+    **Solution:** Use non-quantized model. Quantization benefits require sufficient compute-bound operations.
+  </Accordion>
+</AccordionGroup>
+
+## Advanced Configuration
+
+The script uses minimal configuration for simplicity. For advanced use cases, modify `quantize_onnx.py`:
+
+<CodeGroup>
+```python Per-channel quantization
+from onnxruntime.quantization import quantize_dynamic, QuantType
+
+quantize_dynamic(
+    model_input=str(source),
+    model_output=str(target),
+    weight_type=QuantType.QInt8,
+    per_channel=True,  # Finer-grained quantization
+)
+```
+
+```python Operator-specific quantization
+from onnxruntime.quantization import quantize_dynamic, QuantType
+
+quantize_dynamic(
+    model_input=str(source),
+    model_output=str(target),
+    weight_type=QuantType.QInt8,
+    op_types_to_quantize=["MatMul", "Gemm"],  # Only quantize specific ops
+)
+```
+
+```python Extra optimization passes
+from onnxruntime.quantization import quantize_dynamic, QuantType
+
+quantize_dynamic(
+    model_input=str(source),
+    model_output=str(target),
+    weight_type=QuantType.QInt8,
+    optimize_model=True,  # Apply graph optimizations
+)
+```
+</CodeGroup>
+
+## References
+
+- [ONNX Runtime Quantization Docs](https://onnxruntime.ai/docs/performance/quantization.html)
+- [Dynamic vs Static Quantization](https://onnxruntime.ai/docs/performance/model-optimizations/quantization.html#dynamic-quantization)
+- [INT8 Inference Best Practices](https://www.intel.com/content/www/us/en/developer/articles/technical/lower-numerical-precision-deep-learning-inference.html)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Parity Validation" icon="check-double" href="/deployment/parity-validation">
+    Validate quantized model accuracy
+  </Card>
+  <Card title="CPU Inference" icon="microchip" href="/deployment/overview#5-performance-benchmarking">
+    Benchmark quantized model performance
+  </Card>
+</CardGroup>

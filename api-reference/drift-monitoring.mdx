@@ -1,0 +1,277 @@
+---
+title: 'Drift Monitoring'
+api: 'GET /monitoring/drift'
+---
+
+# Model Drift Status
+
+Monitors feature distribution drift and prediction rate shifts to detect when model retraining is needed.
+
+## Endpoint
+
+```
+GET /monitoring/drift
+```
+
+## Response
+
+Returns comprehensive drift analysis based on accumulated prediction data.
+
+<ResponseField name="samples_observed" type="integer" required>
+  Total number of predictions made since service startup.
+</ResponseField>
+
+<ResponseField name="drift_score_max_abs_z" type="number" required>
+  Maximum absolute z-score across all monitored features.
+  
+  Measures how many standard deviations the current feature means are from training baseline.
+</ResponseField>
+
+<ResponseField name="drifted_features" type="array" required>
+  List of feature names that have drifted beyond the z-score threshold.
+  
+  Empty array if no features have drifted significantly.
+</ResponseField>
+
+<ResponseField name="predicted_positive_rate" type="number" required>
+  Current rate of positive predictions (predicted_purchase=1) in production.
+  
+  Value between 0.0 and 1.0.
+</ResponseField>
+
+<ResponseField name="training_positive_rate" type="number" required>
+  Historical positive rate from the training dataset baseline.
+  
+  Used to detect prediction rate shift.
+</ResponseField>
+
+<ResponseField name="should_retrain" type="boolean" required>
+  Whether retraining is recommended based on drift detection rules.
+</ResponseField>
+
+<ResponseField name="reason" type="string" required>
+  Human-readable explanation for the retraining recommendation.
+  
+  **Possible values:**
+  - `baseline_not_loaded` - Drift baseline file missing
+  - `no_predictions_observed` - No predictions made yet
+  - `insufficient_samples` - Need more samples for reliable drift detection
+  - `below_threshold` - No significant drift detected
+  - `feature_distribution_drift` - Features have drifted significantly
+  - `prediction_rate_shift` - Prediction rate has changed significantly
+</ResponseField>
+
+<ResponseField name="recommended_action" type="string" required>
+  Specific action to take based on drift status.
+  
+  **Possible values:**
+  - `run_training_to_generate_baseline` - Run training pipeline to create baseline
+  - `collect_inference_samples` - Continue collecting prediction data
+  - `collect_more_samples` - Need more data for drift analysis
+  - `continue_monitoring` - Keep monitoring, no action needed
+  - `trigger_retraining_pipeline` - Initiate model retraining
+</ResponseField>
+
+## Status Codes
+
+- **200 OK** - Drift status computed successfully
+
+## Example Request
+
+```bash cURL
+curl -X GET "http://localhost:8000/monitoring/drift" \
+  -H "accept: application/json"
+```
+
+## Example Responses
+
+### No Drift Detected
+
+```json 200 OK
+{
+  "samples_observed": 1247,
+  "drift_score_max_abs_z": 1.8342,
+  "drifted_features": [],
+  "predicted_positive_rate": 0.3456,
+  "training_positive_rate": 0.3512,
+  "should_retrain": false,
+  "reason": "below_threshold",
+  "recommended_action": "continue_monitoring"
+}
+```
+
+### Feature Drift Detected
+
+```json 200 OK
+{
+  "samples_observed": 2834,
+  "drift_score_max_abs_z": 4.2187,
+  "drifted_features": [
+    "minutes_watched",
+    "practice_exams_started"
+  ],
+  "predicted_positive_rate": 0.2891,
+  "training_positive_rate": 0.3512,
+  "should_retrain": true,
+  "reason": "feature_distribution_drift",
+  "recommended_action": "trigger_retraining_pipeline"
+}
+```
+
+### Prediction Rate Shift
+
+```json 200 OK
+{
+  "samples_observed": 1523,
+  "drift_score_max_abs_z": 2.1456,
+  "drifted_features": [],
+  "predicted_positive_rate": 0.4789,
+  "training_positive_rate": 0.3512,
+  "should_retrain": true,
+  "reason": "prediction_rate_shift",
+  "recommended_action": "trigger_retraining_pipeline"
+}
+```
+
+### Insufficient Data
+
+```json 200 OK
+{
+  "samples_observed": 42,
+  "drift_score_max_abs_z": 2.8921,
+  "drifted_features": ["courses_started"],
+  "predicted_positive_rate": 0.4286,
+  "training_positive_rate": 0.3512,
+  "should_retrain": false,
+  "reason": "insufficient_samples",
+  "recommended_action": "collect_more_samples"
+}
+```
+
+### Baseline Not Loaded
+
+```json 200 OK
+{
+  "samples_observed": 0,
+  "drift_score_max_abs_z": 0.0,
+  "drifted_features": [],
+  "predicted_positive_rate": 0.0,
+  "training_positive_rate": 0.0,
+  "should_retrain": false,
+  "reason": "baseline_not_loaded",
+  "recommended_action": "run_training_to_generate_baseline"
+}
+```
+
+## Implementation Details
+
+Defined in `src/api.py:300-302`
+
+**Response Model:** `DriftStatusResponse` (src/api.py:56-64)
+
+```python
+class DriftStatusResponse(BaseModel):
+    samples_observed: int
+    drift_score_max_abs_z: float
+    drifted_features: List[str]
+    predicted_positive_rate: float
+    training_positive_rate: float
+    should_retrain: bool
+    reason: str
+    recommended_action: str
+```
+
+## Drift Detection Algorithm
+
+Implemented in `_compute_drift_status()` (src/api.py:91-172)
+
+### Configuration Parameters
+
+Defined in `config.yaml` under the `monitoring` section:
+
+```yaml
+monitoring:
+  drift_min_samples: 100              # Minimum samples needed for drift analysis
+  drift_zscore_threshold: 3.0         # Z-score threshold for feature drift
+  drift_min_features: 2               # Minimum drifted features to trigger retraining
+  class_rate_shift_threshold: 0.10    # Prediction rate shift threshold (10%)
+```
+
+### Detection Logic
+
+1. **Feature Drift Detection**
+   - For each numeric feature, compute running mean from predictions
+   - Calculate z-score: `(current_mean - baseline_mean) / baseline_std`
+   - Flag feature as drifted if `|z-score| >= drift_zscore_threshold`
+   - Trigger retraining if `drifted_features.count >= drift_min_features`
+
+2. **Prediction Rate Shift Detection**
+   - Track ratio of positive predictions in production
+   - Compare against training dataset positive rate
+   - Trigger retraining if `|predicted_rate - training_rate| >= class_rate_shift_threshold`
+
+3. **Sample Size Validation**
+   - Require at least `drift_min_samples` before analyzing drift
+   - Prevents false positives from small sample noise
+
+### Thread Safety
+
+Monitoring state is protected by a threading lock (`_LOCK`) to ensure atomic updates:
+- Feature sums accumulated after each prediction
+- Sample counts incremented atomically
+- Positive prediction counts tracked accurately
+
+## Baseline Generation
+
+The drift baseline is generated during model training (`src/train.py`):
+
+1. Compute statistics (mean, std) for all numeric features in training data
+2. Calculate training set positive rate
+3. Save to `artifacts/drift_baseline.json`
+4. Loaded at API startup from config path: `artifacts.drift_baseline_file`
+
+**Baseline File Location:** `artifacts/drift_baseline.json`
+
+## Integration with MLOps Pipeline
+
+### Automated Retraining Workflow
+
+```python
+import requests
+import time
+
+while True:
+    response = requests.get("http://api:8000/monitoring/drift")
+    status = response.json()
+    
+    if status["should_retrain"]:
+        print(f"Drift detected: {status['reason']}")
+        print(f"Action: {status['recommended_action']}")
+        # Trigger retraining pipeline
+        trigger_training_job()
+        time.sleep(86400)  # Check daily
+    else:
+        time.sleep(3600)  # Check hourly
+```
+
+### Monitoring Dashboard Metrics
+
+Recommended dashboard visualizations:
+- Time series of `drift_score_max_abs_z`
+- Prediction rate vs training rate comparison
+- Count of drifted features over time
+- `should_retrain` flag alerts
+
+## Related Endpoints
+
+- [Health Check](/api-reference/health) - Check if drift baseline is loaded
+- [Predict](/api-reference/predict) - Single predictions that contribute to drift tracking
+- [Batch Predict](/api-reference/batch-predict) - Batch predictions that contribute to drift tracking
+
+## Best Practices
+
+1. **Monitor regularly** - Check drift status hourly or daily depending on prediction volume
+2. **Adjust thresholds** - Tune `drift_zscore_threshold` and `class_rate_shift_threshold` based on your model's stability
+3. **Validate retraining** - Always validate retrained models before deployment
+4. **Reset monitoring** - Clear monitoring state after retraining by restarting the service
+5. **Log drift events** - Integrate drift alerts with your observability platform

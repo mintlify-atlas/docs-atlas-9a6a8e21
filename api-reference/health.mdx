@@ -1,0 +1,87 @@
+---
+title: 'Health Check'
+api: 'GET /health'
+---
+
+# Health Check Endpoint
+
+Checks the readiness status of the Student Purchase Prediction API and its components.
+
+## Endpoint
+
+```
+GET /health
+```
+
+## Response
+
+Returns the health status of the API service and its loaded artifacts.
+
+<ResponseField name="ready" type="boolean" required>
+  Overall readiness status. Returns `true` only when model, threshold, and feature config are all loaded.
+</ResponseField>
+
+<ResponseField name="predictor_loaded" type="boolean" required>
+  Whether the trained model artifact has been successfully loaded into memory.
+</ResponseField>
+
+<ResponseField name="drift_baseline_loaded" type="boolean" required>
+  Whether the drift monitoring baseline file has been loaded. Used for distribution drift detection.
+</ResponseField>
+
+## Status Codes
+
+- **200 OK** - Health check completed successfully
+
+## Example Request
+
+```bash cURL
+curl -X GET "http://localhost:8000/health" \
+  -H "accept: application/json"
+```
+
+## Example Response
+
+```json 200 OK
+{
+  "ready": true,
+  "predictor_loaded": true,
+  "drift_baseline_loaded": true
+}
+```
+
+### Service Not Ready
+
+```json 200 OK
+{
+  "ready": false,
+  "predictor_loaded": false,
+  "drift_baseline_loaded": false
+}
+```
+
+## Implementation Details
+
+Defined in `src/api.py:275-281`
+
+**Response Model:** `HealthResponse` (src/api.py:50-53)
+
+```python
+class HealthResponse(BaseModel):
+    ready: bool
+    predictor_loaded: bool
+    drift_baseline_loaded: bool
+```
+
+The endpoint checks global state variables:
+- `_MODEL`: Trained scikit-learn model
+- `_THRESHOLD`: Classification threshold
+- `_FEATURE_CFG`: Feature engineering configuration
+- `_DRIFT_BASELINE`: Baseline statistics for drift monitoring
+
+## Use Cases
+
+- **Container health probes** - Kubernetes liveness/readiness checks
+- **Load balancer health checks** - Ensure traffic only routes to ready instances
+- **Monitoring dashboards** - Track service availability
+- **Pre-deployment validation** - Verify artifacts loaded correctly after deployment

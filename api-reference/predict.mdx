@@ -1,0 +1,175 @@
+---
+title: 'Single Prediction'
+api: 'POST /predict'
+---
+
+# Predict Purchase Probability
+
+Predicts whether a student will make a purchase based on their engagement metrics.
+
+## Endpoint
+
+```
+POST /predict
+```
+
+## Request Body
+
+Send a JSON object with the student's engagement features.
+
+<ParamField body="student_country" type="string" required>
+  Student's country code or name. Must be between 2 and 64 characters.
+  
+  **Validation:** `min_length=2, max_length=64`
+</ParamField>
+
+<ParamField body="days_on_platform" type="integer" required>
+  Number of days since the student joined the platform.
+  
+  **Validation:** `>= 0`
+</ParamField>
+
+<ParamField body="minutes_watched" type="number" required>
+  Total minutes of video content watched by the student.
+  
+  **Validation:** `>= 0.0`
+</ParamField>
+
+<ParamField body="courses_started" type="integer" required>
+  Number of courses the student has started.
+  
+  **Validation:** `>= 0`
+</ParamField>
+
+<ParamField body="practice_exams_started" type="integer" required>
+  Number of practice exams the student has begun.
+  
+  **Validation:** `>= 0`
+</ParamField>
+
+<ParamField body="practice_exams_passed" type="integer" required>
+  Number of practice exams the student has successfully passed.
+  
+  **Validation:** `>= 0`
+  
+  **Business Rule:** Cannot exceed `practice_exams_started`
+</ParamField>
+
+<ParamField body="minutes_spent_on_exams" type="number" required>
+  Total minutes spent taking practice exams.
+  
+  **Validation:** `>= 0.0`
+</ParamField>
+
+## Response
+
+Returns the prediction result with probability and binary classification.
+
+<ResponseField name="predicted_purchase_probability" type="number" required>
+  Probability score between 0.0 and 1.0 indicating likelihood of purchase.
+  
+  Higher values indicate higher purchase intent.
+</ResponseField>
+
+<ResponseField name="predicted_purchase" type="integer" required>
+  Binary prediction: `1` for predicted purchase, `0` for no purchase.
+  
+  Determined by comparing probability against the trained threshold.
+</ResponseField>
+
+## Status Codes
+
+- **200 OK** - Prediction successful
+- **422 Unprocessable Entity** - Validation error (e.g., practice_exams_passed > practice_exams_started)
+- **503 Service Unavailable** - Model not loaded
+
+## Example Request
+
+```bash cURL
+curl -X POST "http://localhost:8000/predict" \
+  -H "Content-Type: application/json" \
+  -H "accept: application/json" \
+  -d '{
+    "student_country": "United States",
+    "days_on_platform": 45,
+    "minutes_watched": 320.5,
+    "courses_started": 3,
+    "practice_exams_started": 5,
+    "practice_exams_passed": 3,
+    "minutes_spent_on_exams": 87.2
+  }'
+```
+
+## Example Response
+
+```json 200 OK
+{
+  "predicted_purchase_probability": 0.7834,
+  "predicted_purchase": 1
+}
+```
+
+## Error Responses
+
+### Validation Error
+
+```json 422 Unprocessable Entity
+{
+  "detail": "practice_exams_passed cannot exceed practice_exams_started."
+}
+```
+
+### Service Unavailable
+
+```json 503 Service Unavailable
+{
+  "detail": "Model is not loaded."
+}
+```
+
+## Implementation Details
+
+Defined in `src/api.py:284-289`
+
+**Request Model:** `PredictRequest` (src/api.py:27-34)
+
+```python
+class PredictRequest(BaseModel):
+    student_country: str = Field(..., min_length=2, max_length=64)
+    days_on_platform: int = Field(..., ge=0)
+    minutes_watched: float = Field(..., ge=0)
+    courses_started: int = Field(..., ge=0)
+    practice_exams_started: int = Field(..., ge=0)
+    practice_exams_passed: int = Field(..., ge=0)
+    minutes_spent_on_exams: float = Field(..., ge=0)
+```
+
+**Response Model:** `PredictResponse` (src/api.py:37-39)
+
+```python
+class PredictResponse(BaseModel):
+    predicted_purchase_probability: float
+    predicted_purchase: int
+```
+
+## Feature Engineering
+
+The endpoint automatically applies feature engineering transformations defined in `src/features.py`:
+
+- **Engagement Score**: Weighted combination of minutes watched, days on platform, and courses started
+- **Exam Success Rate**: `practice_exams_passed / (practice_exams_started + epsilon)`
+- **Efficiency**: `minutes_watched / (days_on_platform + epsilon)`
+
+These engineered features are used by the model for prediction.
+
+## Monitoring
+
+Each prediction is:
+1. **Logged** to `artifacts/prediction_log.jsonl` with timestamp and features
+2. **Tracked** for drift monitoring (feature distributions and prediction rates)
+3. **Counted** in the global monitoring state for `/monitoring/drift` endpoint
+
+## Related Endpoints
+
+- [Batch Predict](/api-reference/batch-predict) - Process multiple predictions in a single request
+- [Drift Monitoring](/api-reference/drift-monitoring) - Monitor model drift over time

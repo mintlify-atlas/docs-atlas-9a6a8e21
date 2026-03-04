@@ -1,80 +1,396 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: 'Quickstart Guide'
+description: 'Get started with the AI Systems Engineering Portfolio in under 10 minutes'
 ---
 
-## Get started in three steps
+This guide walks you through installation, training your first model, starting the API server, and making predictions.
 
-Get your documentation site running locally and make your first customization.
+## Prerequisites
 
-### Step 1: Set up your local environment
+Before you begin, ensure you have:
+- Python 3.8 or higher
+- pip package manager
+- Git (optional, for cloning the repository)
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+## Installation
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone <repository-url>
+    cd <repository-name>
+    ```
+  </Step>
+
+  <Step title="Install dependencies">
+    Upgrade pip and install all required packages:
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
+    ```bash
+    python -m pip install --upgrade pip
+    pip install -r requirements.txt
+    ```
+
+    <Accordion title="View key dependencies">
+      The project uses these core libraries:
+      - **FastAPI 0.115.0** - API server framework
+      - **scikit-learn 1.5.2** - Machine learning models
+      - **pandas 2.2.2** - Data processing
+      - **ONNX Runtime 1.19.2** - Optimized inference
+      - **uvicorn 0.30.6** - ASGI server
+    </Accordion>
+  </Step>
+
+  <Step title="Verify installation">
+    Check that the configuration file is present:
     
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
+    ```bash
+    cat config.yaml
+    ```
     
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    You should see configuration for models, data paths, and artifacts.
+  </Step>
+</Steps>
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+## Training Your First Model
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+The training pipeline trains multiple classifiers and selects the best performer based on cross-validation.
 
-### Step 3: Go live
+### Run Training
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+<CodeGroup>
+```bash Direct execution
+python -m src.train
+```
 
-## Next steps
+```bash Using Makefile
+make train
+```
+</CodeGroup>
 
-Now that you have your docs running, explore these key features:
+### Expected Output
 
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+The training script will:
+1. Load data from `ml_datasource.csv` (src/data.py:28)
+2. Train 5 different models: Logistic Regression, KNN, SVM, Decision Tree, and Random Forest (src/train.py:58-97)
+3. Perform 5-fold stratified cross-validation (src/train.py:130-134)
+4. Select the best model based on ROC-AUC score (src/train.py:156)
+5. Calibrate decision threshold to target 90% precision (config.yaml:34)
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+  The training process uses a configurable seed (default: 42) for reproducibility. All random operations are deterministic.
 </Note>
+
+Example output:
+
+```json
+{
+  "run_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "best_model_name": "Random Forest",
+  "calibration": {
+    "type": "threshold",
+    "target_precision": 0.9,
+    "threshold": 0.6524
+  },
+  "accuracy": 0.9234,
+  "roc_auc": 0.9567,
+  "precision": 0.9012,
+  "recall": 0.8345,
+  "f1": 0.8665,
+  "cv_ranking": [
+    {
+      "model": "Random Forest",
+      "cv_roc_auc_mean": 0.9523,
+      "cv_precision_mean": 0.8934,
+      "cv_recall_mean": 0.8456,
+      "cv_f1_mean": 0.8687
+    }
+  ]
+}
+```
+
+### Generated Artifacts
+
+Training creates several files in the `artifacts/` directory (src/train.py:172-224):
+
+| File | Description | Reference |
+|------|-------------|----------|
+| `best_model.joblib` | Trained sklearn pipeline with preprocessor | config.yaml:37 |
+| `threshold.txt` | Calibrated decision threshold | config.yaml:38 |
+| `metrics.json` | Performance metrics and CV results | config.yaml:39 |
+| `lineage.json` | SHA-256 hashes for reproducibility | config.yaml:41 |
+| `drift_baseline.json` | Training distribution statistics | config.yaml:40 |
+
+<Warning>
+  You must complete training before starting the API server. The API requires `best_model.joblib` and `threshold.txt` to load.
+</Warning>
+
+## Starting the API Server
+
+The FastAPI server provides endpoints for predictions, batch inference, and drift monitoring.
+
+### Launch the Server
+
+```bash
+uvicorn src.api:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### Verify Server Health
+
+Check that the model loaded successfully:
+
+```bash
+curl http://localhost:8000/health
+```
+
+Expected response:
+
+```json
+{
+  "ready": true,
+  "predictor_loaded": true,
+  "drift_baseline_loaded": true
+}
+```
+
+If `ready` is `false`, the model artifacts are missing. Re-run training.
+
+## Making Your First Prediction
+
+The API accepts student engagement features and returns purchase probability.
+
+### Single Prediction
+
+Send a POST request to `/predict` with student features:
+
+```bash
+curl -X POST "http://localhost:8000/predict" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "student_country": "US",
+    "days_on_platform": 12,
+    "minutes_watched": 366.7,
+    "courses_started": 5,
+    "practice_exams_started": 1,
+    "practice_exams_passed": 0,
+    "minutes_spent_on_exams": 3.27
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "predicted_purchase_probability": 0.8234,
+  "predicted_purchase": 1
+}
+```
+
+<Accordion title="Understanding the response">
+  - **predicted_purchase_probability**: Raw model probability (0.0 to 1.0)
+  - **predicted_purchase**: Binary prediction (0 or 1) using calibrated threshold
+  
+  The prediction is 1 if probability ≥ threshold (src/api.py:252)
+</Accordion>
+
+### Batch Predictions
+
+Process multiple records in a single request:
+
+```bash
+curl -X POST "http://localhost:8000/batch_predict" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "records": [
+      {
+        "student_country": "US",
+        "days_on_platform": 12,
+        "minutes_watched": 366.7,
+        "courses_started": 5,
+        "practice_exams_started": 1,
+        "practice_exams_passed": 0,
+        "minutes_spent_on_exams": 3.27
+      },
+      {
+        "student_country": "IN",
+        "days_on_platform": 259,
+        "minutes_watched": 118.0,
+        "courses_started": 2,
+        "practice_exams_started": 2,
+        "practice_exams_passed": 1,
+        "minutes_spent_on_exams": 16.48
+      }
+    ]
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "predictions": [
+    {
+      "predicted_purchase_probability": 0.8234,
+      "predicted_purchase": 1
+    },
+    {
+      "predicted_purchase_probability": 0.2156,
+      "predicted_purchase": 0
+    }
+  ]
+}
+```
+
+## Input Validation
+
+The API enforces schema validation using Pydantic (src/api.py:27-35):
+
+<CardGroup cols={2}>
+  <Card title="Required Fields" icon="check">
+    - `student_country` (2-64 chars)
+    - `days_on_platform` (≥0)
+    - `minutes_watched` (≥0)
+    - `courses_started` (≥0)
+    - `practice_exams_started` (≥0)
+    - `practice_exams_passed` (≥0)
+    - `minutes_spent_on_exams` (≥0)
+  </Card>
+  
+  <Card title="Business Rules" icon="shield">
+    - `practice_exams_passed` cannot exceed `practice_exams_started`
+    - Validation occurs at src/api.py:243-248
+  </Card>
+</CardGroup>
+
+### Handling Validation Errors
+
+Invalid requests return HTTP 422:
+
+```bash
+curl -X POST "http://localhost:8000/predict" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "student_country": "US",
+    "days_on_platform": -5,
+    "minutes_watched": 100.0,
+    "courses_started": 1,
+    "practice_exams_started": 1,
+    "practice_exams_passed": 2,
+    "minutes_spent_on_exams": 10.0
+  }'
+```
+
+**Error Response:**
+
+```json
+{
+  "detail": "practice_exams_passed cannot exceed practice_exams_started."
+}
+```
+
+## Monitoring and Drift Detection
+
+The API tracks prediction statistics and feature distributions in real-time.
+
+### Check Drift Status
+
+```bash
+curl http://localhost:8000/monitoring/drift
+```
+
+**Response:**
+
+```json
+{
+  "samples_observed": 127,
+  "drift_score_max_abs_z": 2.34,
+  "drifted_features": ["minutes_watched"],
+  "predicted_positive_rate": 0.15,
+  "training_positive_rate": 0.12,
+  "should_retrain": false,
+  "reason": "below_threshold",
+  "recommended_action": "continue_monitoring"
+}
+```
+
+<Note>
+  Drift detection requires at least 50 samples (config.yaml:44). The system compares running feature means to training baselines using z-scores (src/api.py:91-172).
+</Note>
+
+### Retraining Triggers
+
+The system recommends retraining when:
+- ≥2 features drift beyond z-score threshold of 3.0 (config.yaml:45-46)
+- Prediction rate shifts >10% from training rate (config.yaml:47)
+
+Check retraining status:
+
+```bash
+curl http://localhost:8000/monitoring/retraining_trigger
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Model artifacts missing">
+    **Error:** `RuntimeError: Model artifacts are missing`
+    
+    **Solution:** Run training first:
+    ```bash
+    python -m src.train
+    ```
+    
+    Verify artifacts were created:
+    ```bash
+    ls -l artifacts/
+    ```
+  </Accordion>
+
+  <Accordion title="Port already in use">
+    **Error:** `OSError: [Errno 98] Address already in use`
+    
+    **Solution:** Use a different port:
+    ```bash
+    uvicorn src.api:app --port 8001
+    ```
+  </Accordion>
+
+  <Accordion title="Import errors">
+    **Error:** `ModuleNotFoundError: No module named 'src'`
+    
+    **Solution:** Run from the repository root directory:
+    ```bash
+    cd /path/to/repository
+    python -m src.train
+    ```
+  </Accordion>
+
+  <Accordion title="Low prediction accuracy">
+    **Issue:** Model performance is poor
+    
+    **Investigation steps:**
+    1. Check metrics.json for CV scores
+    2. Verify data quality in ml_datasource.csv
+    3. Adjust model hyperparameters in config.yaml
+    4. Review feature engineering in src/features.py
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="System Architecture" icon="diagram-project" href="/architecture">
+    Learn how components connect across the ML lifecycle
+  </Card>
+  
+  <Card title="Configuration Guide" icon="gear" href="/configuration">
+    Customize model training, features, and monitoring
+  </Card>
+  
+  <Card title="Deployment Guide" icon="rocket" href="/deployment">
+    Export to ONNX and deploy optimized models
+  </Card>
+  
+  <Card title="Benchmarking" icon="chart-line" href="/benchmarking">
+    Measure latency, throughput, and accuracy trade-offs
+  </Card>
+</CardGroup>

@@ -1,0 +1,301 @@
+---
+title: 'Model Evaluation & Metrics'
+description: 'Evaluate model performance and calibrate decision thresholds for business objectives'
+---
+
+## Overview
+
+After model selection, the best model is evaluated on the test set with calibrated decision thresholds to meet business requirements. The evaluation focuses on precision-recall tradeoffs and ROC AUC performance.
+
+## Evaluation Metrics
+
+Four primary metrics are computed on the test set:
+
+### 1. ROC AUC (Area Under ROC Curve)
+
+Measures overall classification performance across all thresholds.
+
+**Range**: 0.0 to 1.0 (higher is better)
+
+**Interpretation**:
+- 0.5: Random guessing
+- 0.7-0.8: Acceptable performance
+- 0.8-0.9: Good performance
+- 0.9+: Excellent performance
+
+**Implementation**: `src/train.py:193`
+
+```python
+roc_auc = float(roc_auc_score(y_test, probs))
+```
+
+### 2. Precision
+
+Proportion of predicted purchases that were actual purchases.
+
+**Formula**: `TP / (TP + FP)`
+
+**Why it matters**: High precision means fewer false alarms (users predicted to purchase who don't)
+
+**Implementation**: `src/train.py:194`
+
+```python
+precision = float(precision_score(y_test, preds, zero_division=0))
+```
+
+### 3. Recall
+
+Proportion of actual purchases that were correctly predicted.
+
+**Formula**: `TP / (TP + FN)`
+
+**Why it matters**: High recall means capturing most potential purchasers
+
+**Implementation**: `src/train.py:195`
+
+```python
+recall = float(recall_score(y_test, preds, zero_division=0))
+```
+
+### 4. F1 Score
+
+Harmonic mean of precision and recall.
+
+**Formula**: `2 × (precision × recall) / (precision + recall)`
+
+**Why it matters**: Balances precision and recall into single metric
+
+**Implementation**: `src/train.py:196`
+
+```python
+f1 = float(f1_score(y_test, preds, zero_division=0))
+```
+
+## Precision-Recall Threshold Calibration
+
+The default 0.5 threshold is replaced with a calibrated threshold to meet business precision targets.
+
+**Implementation**: `src/train.py:159-170`
+
+```python
+probs = best_pipeline.predict_proba(X_test)[:, 1]
+precisions, recalls, thresholds = precision_recall_curve(y_test, probs)
+target_precision = float(config["business"]["target_precision"])
+
+candidates = [i for i, p in enumerate(precisions[:-1]) if p >= target_precision]
+if candidates:
+    idx = max(candidates, key=lambda i: recalls[i])
+else:
+    idx = int(np.argmax(precisions[:-1]))
+
+threshold = float(thresholds[idx])
+preds = (probs >= threshold).astype(int)
+```
+
+### Threshold Selection Algorithm
+
+1. **Generate precision-recall curve** at all possible thresholds
+2. **Filter candidates** where precision ≥ target_precision
+3. **Select threshold** with maximum recall among candidates
+4. **Fallback**: If no candidates, use threshold with highest precision
+
+### Business Configuration
+
+Target precision is configured in `config.yaml`:
+
+```yaml
+business:
+  target_precision: 0.9
+```
+
+**Interpretation**: We want 90% of predicted purchases to be correct, even if it means lower recall.
+
+### Why Calibrate Thresholds?
+
+Default 0.5 threshold may not align with business goals:
+
+- **Marketing campaigns**: High precision reduces wasted ad spend
+- **Sales outreach**: Focus efforts on likely purchasers
+- **User experience**: Avoid over-targeting uninterested users
+
+## Metrics Output Format
+
+All metrics are saved to `metrics.json`:
+
+**Implementation**: `src/train.py:188-199`
+
+```json
+{
+  "run_id": "a3f2c4b8-9d1e-4f6a-8c2d-7e5b3a1c9f0d",
+  "best_model_name": "Random Forest",
+  "calibration": {
+    "type": "threshold",
+    "target_precision": 0.9,
+    "threshold": 0.6234
+  },
+  "accuracy": 0.847,
+  "roc_auc": 0.892,
+  "precision": 0.903,
+  "recall": 0.712,
+  "f1": 0.796,
+  "cv_ranking": [
+    {
+      "model": "Random Forest",
+      "cv_roc_auc_mean": 0.889,
+      "cv_precision_mean": 0.851,
+      "cv_recall_mean": 0.723,
+      "cv_f1_mean": 0.782
+    }
+  ]
+}
+```
+
+### Metrics Structure
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `run_id` | string | Unique identifier for training run |
+| `best_model_name` | string | Name of selected model |
+| `calibration` | object | Threshold calibration details |
+| `calibration.type` | string | Calibration method ("threshold") |
+| `calibration.target_precision` | float | Target precision from config |
+| `calibration.threshold` | float | Selected decision threshold |
+| `accuracy` | float | Overall classification accuracy |
+| `roc_auc` | float | ROC AUC score |
+| `precision` | float | Precision at calibrated threshold |
+| `recall` | float | Recall at calibrated threshold |
+| `f1` | float | F1 score at calibrated threshold |
+| `cv_ranking` | array | Cross-validation results for all models |
+
+## Artifacts Configuration
+
+Output locations are configured in `config.yaml`:
+
+```yaml
+artifacts:
+  model_dir: artifacts
+  model_file: best_model.joblib
+  threshold_file: threshold.txt
+  metrics_file: metrics.json
+  drift_baseline_file: drift_baseline.json
+  lineage_file: lineage.json
+```
+
+### Generated Files
+
+1. **best_model.joblib**: Trained scikit-learn pipeline
+2. **threshold.txt**: Calibrated threshold value (plain text)
+3. **metrics.json**: Complete evaluation metrics (JSON)
+4. **drift_baseline.json**: Training data statistics for drift detection
+5. **lineage.json**: Data and model provenance information
+
+## Model Persistence
+
+The best model and threshold are saved for production use:
+
+**Implementation**: `src/train.py:172-181`
+
+```python
+out_dir = Path(config["artifacts"]["model_dir"])
+out_dir.mkdir(parents=True, exist_ok=True)
+
+model_path = out_dir / config["artifacts"]["model_file"]
+threshold_path = out_dir / config["artifacts"]["threshold_file"]
+metrics_path = out_dir / config["artifacts"]["metrics_file"]
+
+joblib.dump(best_pipeline, model_path)
+threshold_path.write_text(str(threshold), encoding="utf-8")
+metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+```
+
+## Lineage Tracking
+
+Data and model lineage is tracked with SHA256 hashes:
+
+**Implementation**: `src/train.py:201-220`
+
+```python
+run_id = str(uuid.uuid4())
+config_hash = _sha256_file(Path("config.yaml"))
+dataset_hash = _sha256_file(Path(config["data"]["path"]))
+model_hash = _sha256_file(model_path)
+
+lineage = {
+    "run_id": run_id,
+    "dataset": {
+        "path": config["data"]["path"],
+        "sha256": dataset_hash,
+    },
+    "config": {
+        "path": "config.yaml",
+        "sha256": config_hash,
+    },
+    "model": {
+        "path": str(model_path),
+        "sha256": model_hash,
+    },
+    "threshold": {
+        "path": str(threshold_path),
+        "sha256": _sha256_file(threshold_path),
+    },
+}
+lineage_path.write_text(json.dumps(lineage, indent=2), encoding="utf-8")
+```
+
+### Lineage Benefits
+
+- **Reproducibility**: Track exact data and config versions
+- **Auditability**: Verify model provenance
+- **Debugging**: Identify which data produced which model
+- **Rollback**: Match models to their training data
+
+## Usage Example
+
+```python
+import joblib
+import json
+
+# Load trained model and threshold
+model = joblib.load("artifacts/best_model.joblib")
+threshold = float(open("artifacts/threshold.txt").read())
+
+# Load metrics
+with open("artifacts/metrics.json") as f:
+    metrics = json.load(f)
+
+print(f"Model: {metrics['best_model_name']}")
+print(f"ROC AUC: {metrics['roc_auc']:.3f}")
+print(f"Precision: {metrics['precision']:.3f}")
+print(f"Recall: {metrics['recall']:.3f}")
+print(f"Threshold: {threshold:.4f}")
+
+# Make predictions
+probs = model.predict_proba(X_new)[:, 1]
+predictions = (probs >= threshold).astype(int)
+```
+
+## Complete Training Flow
+
+The full training process (`src/train.py:116-227`):
+
+1. Load configuration and data
+2. Split into train/test sets
+3. Build preprocessor and models
+4. Cross-validate all models
+5. Select best model by ROC AUC
+6. Generate precision-recall curve
+7. Calibrate threshold to target precision
+8. Evaluate on test set
+9. Save model, threshold, and metrics
+10. Track lineage with hashes
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Model Selection" icon="chart-network" href="/training/model-selection">
+    Learn about cross-validation and model comparison
+  </Card>
+  <Card title="Data Loading" icon="database" href="/training/data-loading">
+    Understand the data pipeline
+  </Card>
+</CardGroup>

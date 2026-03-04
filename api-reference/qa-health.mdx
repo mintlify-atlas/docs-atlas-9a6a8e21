@@ -1,0 +1,111 @@
+---
+title: 'QA Health Check'
+api: 'GET /health'
+---
+
+# QA API Health Check
+
+Checks the readiness status of the LangChain QA API service.
+
+## Endpoint
+
+```
+GET /health
+```
+
+## Response
+
+Returns the operational status of the QA API and its components.
+
+<ResponseField name="ready" type="boolean" required>
+  Overall readiness status. Returns `true` only when both the retriever and LLM are successfully initialized.
+  
+  Returns `false` if `OPENAI_API_KEY` is not configured or initialization failed.
+</ResponseField>
+
+## Status Codes
+
+- **200 OK** - Health check completed successfully
+
+## Example Request
+
+```bash cURL
+curl -X GET "http://localhost:8001/health" \
+  -H "accept: application/json"
+```
+
+## Example Responses
+
+### Service Ready
+
+```json 200 OK
+{
+  "ready": true
+}
+```
+
+### Service Not Ready
+
+```json 200 OK
+{
+  "ready": false
+}
+```
+
+## Implementation Details
+
+Defined in `src/qa_api.py:206-208`
+
+**Response Model:** `HealthResponse` (src/qa_api.py:47-48)
+
+```python
+class HealthResponse(BaseModel):
+    ready: bool
+```
+
+The endpoint checks:
+- `retriever`: Chroma vector store retriever for document search
+- `llm`: ChatOpenAI language model instance
+
+Both must be non-None for the service to be considered ready.
+
+## Initialization Requirements
+
+The service requires these environment variables:
+
+### Required
+
+- **OPENAI_API_KEY** - OpenAI API key for embeddings and chat completions
+
+### Optional
+
+- **QA_TRANSCRIPT_PDF** - Path to course transcript PDF (default: `tableau_course_transcript.pdf`)
+- **OPENAI_CHAT_MODEL** - Chat model name (default: `gpt-4o-mini`)
+- **OPENAI_EMBEDDING_MODEL** - Embedding model name (default: `text-embedding-3-small`)
+- **QA_CHROMA_COLLECTION** - Chroma collection name (default: `tableau_qa_collection`)
+
+### Initialization Process
+
+On startup (src/qa_api.py:150-203):
+
+1. Check for `OPENAI_API_KEY`
+2. Load course transcript PDF or use fallback sample text
+3. Split transcript into chunks using Markdown headers
+4. Generate embeddings and create Chroma vector store
+5. Initialize retriever with k=4 search results
+6. Create ChatOpenAI instance with temperature=0
+7. Build chat prompt template
+
+If any step fails or `OPENAI_API_KEY` is missing, the service starts but returns `ready: false`.
+
+## Use Cases
+
+- **Container health probes** - Kubernetes liveness/readiness checks
+- **Load balancer routing** - Ensure traffic only goes to initialized instances
+- **Service monitoring** - Track QA API availability
+- **Pre-request validation** - Check service is ready before sending questions
+
+## Related Endpoints
+
+- [QA Ask](/api-reference/qa-ask) - Submit questions to the QA system
+- [QA Stream](/api-reference/qa-stream) - Stream answers in real-time

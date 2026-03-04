@@ -1,0 +1,254 @@
+---
+title: 'ONNX Export'
+description: 'Convert scikit-learn models to ONNX format for production deployment'
+---
+
+## Overview
+
+The `export_onnx.py` script converts trained scikit-learn models to ONNX format using [skl2onnx](https://github.com/onnx/sklearn-onnx), enabling deployment in non-Python environments and cross-platform inference runtimes.
+
+## Prerequisites
+
+<Steps>
+  <Step title="Train the model">
+    Ensure `artifacts/best_model.joblib` exists:
+    
+    ```bash
+    python -m src.train
+    ```
+  </Step>
+  
+  <Step title="Verify config.yaml">
+    Check that artifact paths are configured:
+    
+    ```yaml
+    artifacts:
+      model_dir: artifacts
+      model_file: best_model.joblib
+      threshold_file: threshold.txt
+    ```
+  </Step>
+</Steps>
+
+## Usage
+
+```bash
+python deployment/export_onnx.py
+```
+
+<Info>
+No command-line arguments required. Configuration is read from `config.yaml`.
+</Info>
+
+## How It Works
+
+### 1. Load Trained Model
+
+The script loads the scikit-learn pipeline from the artifact path specified in `config.yaml`:
+
+```python deployment/export_onnx.py
+config = load_config("config.yaml")
+model_path = Path(config["artifacts"]["model_dir"]) / config["artifacts"]["model_file"]
+model = joblib.load(model_path)
+```
+
+### 2. Infer Input Schema
+
+Automatic type inference from test data determines ONNX input types:
+
+```python deployment/export_onnx.py
+def _build_initial_types(df):
+    initial_types = []
+    for col in df.columns:
+        kind = df[col].dtype.kind
+        if kind in {"i", "u", "b", "f"}:  # numeric
+            initial_types.append((col, FloatTensorType([None, 1])))
+        else:  # categorical
+            initial_types.append((col, StringTensorType([None, 1])))
+    return initial_types
+```
+
+<Note>
+- **Numeric features** (`int`, `uint`, `bool`, `float`) → `FloatTensorType`
+- **Categorical features** (object, string) → `StringTensorType`
+- Batch dimension is dynamic (`None`) to support variable-length inputs
+</Note>
+
+### 3. Convert with skl2onnx
+
+The pipeline is converted to ONNX with target opset version 15:
+
+```python deployment/export_onnx.py
+from skl2onnx import to_onnx
+
+initial_types = _build_initial_types(X_test)
+onx = to_onnx(model, initial_types=initial_types, target_opset=15)
+```
+
+<Info>
+**Target opset 15** is compatible with ONNX Runtime 1.10+ and provides stable operator support for common scikit-learn estimators.
+</Info>
+
+### 4. Serialize and Save Artifacts
+
+Three files are written to `artifacts/`:
+
+```python deployment/export_onnx.py
+(out_dir / "model.onnx").write_bytes(onx.SerializeToString())
+(out_dir / "onnx_features.json").write_text(
+    json.dumps(X_test.columns.tolist(), indent=2)
+)
+(out_dir / "onnx_metadata.json").write_text(
+    json.dumps({"threshold": threshold, "model_source": str(model_path)}, indent=2)
+)
+```
+
+## Output Artifacts
+
+<AccordionGroup>
+  <Accordion title="artifacts/model.onnx">
+    **Binary ONNX graph** containing the full inference pipeline.
+    
+    - Includes preprocessing transformers, imputers, encoders, and estimator
+    - Can be loaded by any ONNX Runtime (Python, C++, C#, Java, JavaScript)
+    - Typical size: 10-100 KB for tree ensembles, larger for neural networks
+  </Accordion>
+  
+  <Accordion title="artifacts/onnx_features.json">
+    **Feature schema** listing expected input column names in order.
+    
+    ```json
+    [
+      "feature_1",
+      "feature_2",
+      "feature_3"
+    ]
+    ```
+    
+    Use this to validate input data before inference.
+  </Accordion>
+  
+  <Accordion title="artifacts/onnx_metadata.json">
+    **Model metadata** capturing threshold and provenance.
+    
+    ```json
+    {
+      "threshold": 0.3826,
+      "model_source": "artifacts/best_model.joblib"
+    }
+    ```
+    
+    - `threshold`: Optimal decision boundary from training
+    - `model_source`: Path to original scikit-learn artifact
+  </Accordion>
+</AccordionGroup>
+
+## Expected Output
+
+```bash
+$ python deployment/export_onnx.py
+Wrote artifacts/model.onnx, onnx_features.json, onnx_metadata.json
+```
+
+## Conversion Process Details
+
+### Supported Pipeline Components
+
+<Tabs>
+  <Tab title="Preprocessing">
+    - `SimpleImputer`
+    - `StandardScaler`, `MinMaxScaler`, `RobustScaler`
+    - `OneHotEncoder`, `OrdinalEncoder`, `LabelEncoder`
+    - `PolynomialFeatures`
+    - `FunctionTransformer` (limited support)
+  </Tab>
+  
+  <Tab title="Estimators">
+    - `LogisticRegression`
+    - `RandomForestClassifier`
+    - `GradientBoostingClassifier`
+    - `SVC` (kernel='linear', 'rbf', 'poly')
+    - `MLPClassifier`
+  </Tab>
+  
+  <Tab title="Pipelines">
+    - `Pipeline`
+    - `ColumnTransformer`
+    - `FeatureUnion`
+  </Tab>
+</Tabs>
+
+<Warning>
+**Custom transformers** not recognized by skl2onnx will cause conversion failures. Implement a [custom converter](https://onnx.ai/sklearn-onnx/auto_tutorial/plot_custom_converter.html) or refactor to use supported components.
+</Warning>
+
+### Operator Compatibility
+
+The conversion targets **ONNX opset 15**, which guarantees:
+
+- All standard scikit-learn operators (tree models, linear models, SVMs)
+- String processing for categorical features
+- ZipMap for dictionary outputs (probability dicts)
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Error: Train first: python -m src.train">
+    **Cause:** `artifacts/best_model.joblib` not found.
+    
+    **Solution:**
+    ```bash
+    python -m src.train
+    ```
+  </Accordion>
+  
+  <Accordion title="RuntimeError: No suitable converter found">
+    **Cause:** Pipeline contains unsupported custom transformer.
+    
+    **Solution:**
+    1. Check [skl2onnx supported operators](https://onnx.ai/sklearn-onnx/supported.html)
+    2. Replace custom transformer with supported equivalent
+    3. Or implement [custom converter](https://onnx.ai/sklearn-onnx/auto_tutorial/plot_custom_converter.html)
+  </Accordion>
+  
+  <Accordion title="ValueError: Initial types mismatch">
+    **Cause:** Feature dtype inference failed or preprocessing changes.
+    
+    **Solution:**
+    1. Verify `X_test` columns match model's expected features
+    2. Check for NaN or infinite values in test data
+    3. Ensure categorical features are properly encoded
+  </Accordion>
+  
+  <Accordion title="ONNX model produces different outputs">
+    **Cause:** Numerical precision differences or preprocessing mismatch.
+    
+    **Solution:** Run parity validation to diagnose:
+    ```bash
+    python deployment/parity_check.py --abs-tol 0.04 --mean-tol 0.01
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Verification
+
+After export, verify the ONNX model loads correctly:
+
+```python
+import onnxruntime as ort
+
+sess = ort.InferenceSession("artifacts/model.onnx", providers=["CPUExecutionProvider"])
+print("Input names:", [inp.name for inp in sess.get_inputs()])
+print("Output names:", [out.name for out in sess.get_outputs()])
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quantization" icon="compress" href="/deployment/quantization">
+    Optimize the exported model with INT8 quantization
+  </Card>
+  <Card title="Parity Validation" icon="check-double" href="/deployment/parity-validation">
+    Validate numerical agreement with scikit-learn
+  </Card>
+</CardGroup>

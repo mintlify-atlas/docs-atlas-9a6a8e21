@@ -1,0 +1,214 @@
+---
+title: 'Feature Engineering'
+description: 'Create derived features to improve model performance'
+---
+
+## Overview
+
+Feature engineering transforms raw data into meaningful predictors. This module creates three engineered features: engagement score, exam success rate, and learning consistency.
+
+## FeatureConfig
+
+Configuration dataclass for feature engineering parameters.
+
+**Implementation**: `src/features.py:9`
+
+```python
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class FeatureConfig:
+    epsilon: float
+    minutes_watched_weight: float
+    days_on_platform_weight: float
+    courses_started_weight: float
+```
+
+### Configuration Values
+
+Defined in `config.yaml`:
+
+```yaml
+features:
+  epsilon: 1.0e-06
+  engagement:
+    minutes_watched_weight: 0.6
+    days_on_platform_weight: 0.3
+    courses_started_weight: 10.0
+```
+
+## Core Function
+
+### add_engineered_features()
+
+Creates three derived features from raw data.
+
+**Implementation**: `src/features.py:17`
+
+```python
+def add_engineered_features(df: pd.DataFrame, cfg: FeatureConfig) -> pd.DataFrame:
+    """Add deterministic engineered features without altering existing columns."""
+    out = df.copy()
+
+    out["engagement_score"] = (
+        out["minutes_watched"] * cfg.minutes_watched_weight
+        + out["days_on_platform"] * cfg.days_on_platform_weight
+        + out["courses_started"] * cfg.courses_started_weight
+    )
+
+    out["exam_success_rate"] = np.where(
+        out["practice_exams_started"] > 0,
+        out["practice_exams_passed"] / (out["practice_exams_started"] + cfg.epsilon),
+        0.0,
+    )
+
+    out["learning_consistency"] = out["minutes_watched"] / np.maximum(
+        out["days_on_platform"], 1
+    )
+
+    return out
+```
+
+## Engineered Features
+
+### 1. Engagement Score
+
+Weighted combination of user activity metrics.
+
+**Formula**:
+```
+engagement_score = (minutes_watched × 0.6) + (days_on_platform × 0.3) + (courses_started × 10.0)
+```
+
+**Purpose**: Captures overall user engagement by combining time, persistence, and course exploration.
+
+**Example**:
+- User with 100 minutes watched, 50 days on platform, and 3 courses started:
+- `engagement_score = (100 × 0.6) + (50 × 0.3) + (3 × 10.0) = 60 + 15 + 30 = 105`
+
+### 2. Exam Success Rate
+
+Ratio of passed exams to started exams with epsilon smoothing.
+
+**Formula**:
+```python
+if practice_exams_started > 0:
+    exam_success_rate = practice_exams_passed / (practice_exams_started + epsilon)
+else:
+    exam_success_rate = 0.0
+```
+
+**Purpose**: Measures exam performance while avoiding division by zero.
+
+**Epsilon**: `1.0e-06` prevents numerical instability
+
+**Example**:
+- User passed 4 out of 5 exams: `4 / (5 + 0.000001) ≈ 0.8`
+- User with no exams: `0.0`
+
+### 3. Learning Consistency
+
+Average minutes watched per day on platform.
+
+**Formula**:
+```python
+learning_consistency = minutes_watched / max(days_on_platform, 1)
+```
+
+**Purpose**: Identifies users with consistent daily engagement vs. sporadic bursts.
+
+**Example**:
+- 300 minutes over 30 days: `300 / 30 = 10 minutes/day`
+- 300 minutes over 3 days: `300 / 3 = 100 minutes/day`
+
+## Feature Importance
+
+These engineered features often outperform raw features:
+
+1. **engagement_score**: Combines multiple signals into single metric
+2. **exam_success_rate**: Strong predictor of purchase intent
+3. **learning_consistency**: Distinguishes committed learners from browsers
+
+## IQRClipper Transformer
+
+Custom scikit-learn transformer for outlier clipping.
+
+**Implementation**: `src/features.py:40`
+
+```python
+class IQRClipper(BaseEstimator, TransformerMixin):
+    """Clip numeric values to IQR bounds learned on train only."""
+
+    def __init__(self, factor: float = 1.5):
+        self.factor = factor
+
+    def fit(self, X, y=None):
+        X_df = pd.DataFrame(X)
+        q1 = X_df.quantile(0.25)
+        q3 = X_df.quantile(0.75)
+        iqr = q3 - q1
+
+        self.lower_bounds_ = (q1 - self.factor * iqr).to_numpy(dtype=float)
+        self.upper_bounds_ = (q3 + self.factor * iqr).to_numpy(dtype=float)
+        return self
+
+    def transform(self, X):
+        X_arr = np.asarray(X, dtype=float)
+        return np.clip(X_arr, self.lower_bounds_, self.upper_bounds_)
+```
+
+### IQR Method
+
+- **Q1**: 25th percentile
+- **Q3**: 75th percentile
+- **IQR**: Q3 - Q1
+- **Bounds**: [Q1 - 1.5×IQR, Q3 + 1.5×IQR]
+
+Configured via `config.yaml`:
+
+```yaml
+preprocessing:
+  outlier_factor: 1.5
+```
+
+## Usage Example
+
+```python
+from src.features import FeatureConfig, add_engineered_features
+import pandas as pd
+
+# Load configuration
+config = load_config("config.yaml")
+
+# Create feature config
+fcfg = FeatureConfig(
+    epsilon=float(config["features"]["epsilon"]),
+    minutes_watched_weight=float(config["features"]["engagement"]["minutes_watched_weight"]),
+    days_on_platform_weight=float(config["features"]["engagement"]["days_on_platform_weight"]),
+    courses_started_weight=float(config["features"]["engagement"]["courses_started_weight"]),
+)
+
+# Apply feature engineering
+df = pd.read_csv("ml_datasource.csv")
+df_engineered = add_engineered_features(df, fcfg)
+
+print(df_engineered.columns)
+# Original columns + ['engagement_score', 'exam_success_rate', 'learning_consistency']
+```
+
+## Related Modules
+
+- Data loading: `src/data.py:26` calls `add_engineered_features()`
+- Preprocessing: Feature transformations applied in training pipeline
+- Model training: Uses engineered features for predictions
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Data Loading" icon="database" href="/training/data-loading">
+    Learn how raw data is loaded and split
+  </Card>
+  <Card title="Model Selection" icon="chart-network" href="/training/model-selection">
+    See how features are used in model training
+  </Card>
+</CardGroup>
